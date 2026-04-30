@@ -128,6 +128,54 @@ Total: 16 GB. Concurrent steady-state max: Ollama + whisper = ~7 GB. ComfyUI ren
 
 **Universal NAG trick:** any time CFG=1 (turbo/distilled), add NAG node with `energy_scale=35` to keep negative prompt effective.
 
+## LoRA management (Civitai integration)
+
+LoRAs live at `/opt/comfyui/models/loras/<category>/`. Registry at `/opt/videogen/loras/registry/registry.json` tracks: trigger words, license, SHA256, source URL.
+
+```bash
+just lora-categories                                       # list category presets
+just lora-search video/motion-wan22                        # top 20 ranked
+just lora-install <civitai_url_or_id> video/motion-wan22   # install specific
+just lora-install-top image/photoreal-flux 5               # install top 5 commercial-OK
+just lora-list                                             # show installed + triggers
+```
+
+**Categories:**
+- `video/motion-wan22` — camera moves (drone, dolly, push-in)
+- `video/character-wan22` — character consistency
+- `video/style-wan22` — cinematic looks
+- `video/lipsync-ltx23` — talking-head lip-sync
+- `image/photoreal-flux` — Flux Krea photoreal
+- `image/style-flux` — artistic styles
+- `image/photoreal-sdxl` / `image/detail-sdxl`
+
+**Filters applied automatically:**
+- `.safetensors` only (never `.ckpt` — pickle code execution risk)
+- SHA256 verified on download (when known)
+- Skips celebrity/likeness/risky names (regex blocklist)
+- `[!]` flag in output = no commercial license; skip for monetized YouTube
+
+**Quality scoring:**
+```
+score = log10(downloads+1)*0.4 + (rating/5)*0.3 + recency*0.2 + commercial*0.1
+```
+Top results = popular AND recent AND commercially safe.
+
+**Civitai paid tier:** $10/mo Bronze gets early access to new LoRAs. Set `CIVITAI_API_KEY` in `~/.bashrc` (key from `civitai.com/user/account → API Keys`). Free tier works fine without.
+
+**Using LoRAs in workflows:**
+1. Find triggers: `just lora-list` shows them per LoRA
+2. Add LoRA Loader node in ComfyUI before sampler
+3. Set strength 0.6-0.9 (start 0.8)
+4. Inject trigger words at start of prompt
+5. Stack max 3-4 LoRAs per gen — quality drops past that
+
+**Safety rules (codified in `lib/civitai.py`):**
+- Never load `.ckpt` files
+- Skip "in style of [living artist]" — legal risk
+- Skip celebrity likeness — lawsuit risk on monetized content
+- Always check `commercial=true` for YouTube revenue work
+
 ## Wan 2.2 + audio (no native audio support)
 
 Wan 2.2 generates silent video. Add audio via Hunyuan-Foley separately:

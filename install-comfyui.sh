@@ -98,6 +98,9 @@ clone_or_pull https://github.com/a-r-r-o-w/ComfyUI-MusicGen.git ComfyUI-MusicGen
 clone_or_pull https://github.com/ChenDarYen/ComfyUI-NAG.git ComfyUI-NAG || true
 # Hunyuan-Foley — add audio to existing Wan video clips
 clone_or_pull https://github.com/if-ai/ComfyUI-IF_HunyuanFoley.git ComfyUI-IF_HunyuanFoley || true
+# Civitai Helper — browse/download LoRAs from Civitai inside ComfyUI
+clone_or_pull https://github.com/butaixianran/Stable-Diffusion-Webui-Civitai-Helper.git Civitai-Helper || true
+clone_or_pull https://github.com/civitai/civitai-comfy-nodes.git civitai-comfy-nodes || true
 
 # install per-node deps
 source "${INSTALL_DIR}/.venv/bin/activate"

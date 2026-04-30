@@ -27,7 +27,7 @@ fi
 
 # ---- skeleton ----
 log "Building skeleton at ${INSTALL_DIR}"
-mkdir -p "${INSTALL_DIR}"/{pipeline/{stages,lib},workflows,projects,scripts}
+mkdir -p "${INSTALL_DIR}"/{pipeline/{stages,lib},workflows,projects,scripts,loras/{watchlists,registry}}
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 # ---- venv ----
@@ -177,6 +177,185 @@ def project_dir(slug: str) -> Path:
     p = ROOT / "projects" / slug
     p.mkdir(parents=True, exist_ok=True)
     return p
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/civitai.py" >/dev/null <<'PY'
+"""Civitai API client + LoRA curator/installer.
+
+API base: https://civitai.com/api/v1
+Auth: optional CIVITAI_API_KEY env var (Bronze tier+ for early-access).
+
+Quality score formula:
+    score = log10(downloads+1) * 0.4
+          + (rating / 5)       * 0.3
+          + recency_bonus      * 0.2
+          + commercial_ok      * 0.1
+"""
+import os, json, hashlib, time, math, re
+from pathlib import Path
+from datetime import datetime
+import requests
+
+API = "https://civitai.com/api/v1"
+COMFY_LORAS = Path("/opt/comfyui/models/loras")
+REGISTRY = Path("/opt/videogen/loras/registry/registry.json")
+
+# Map our categories -> Civitai filter params
+CATEGORIES = {
+    "video/motion-wan22":    dict(types="LORA", baseModel="Wan Video", tag="motion"),
+    "video/character-wan22": dict(types="LORA", baseModel="Wan Video", tag="character"),
+    "video/style-wan22":     dict(types="LORA", baseModel="Wan Video", tag="style"),
+    "video/lipsync-ltx23":   dict(types="LORA", baseModel="LTX-Video", tag="lipsync"),
+    "image/photoreal-flux":  dict(types="LORA", baseModel="Flux.1 D",  tag="photorealistic"),
+    "image/style-flux":      dict(types="LORA", baseModel="Flux.1 D",  tag="style"),
+    "image/photoreal-sdxl":  dict(types="LORA", baseModel="SDXL 1.0",  tag="photorealistic"),
+    "image/detail-sdxl":     dict(types="LORA", baseModel="SDXL 1.0",  tag="detail"),
+}
+
+# Risky tags / signals to filter out
+BLOCKLIST_TAGS = {"celebrity", "actress", "actor", "real person",
+                  "minor", "child", "underage"}
+BLOCKLIST_NAME_PATTERNS = [
+    re.compile(r"\b(taylor swift|elon|trump|biden)\b", re.I),
+]
+
+def _headers():
+    h = {"Accept": "application/json"}
+    key = os.environ.get("CIVITAI_API_KEY")
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+
+def search(category: str, limit: int = 50, period: str = "Month") -> list[dict]:
+    """Query Civitai for top LoRAs in a category."""
+    if category not in CATEGORIES:
+        raise ValueError(f"unknown category: {category}")
+    params = dict(CATEGORIES[category])
+    params.update(limit=limit, sort="Most Downloaded", period=period, nsfw="false")
+    r = requests.get(f"{API}/models", params=params, headers=_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json().get("items", [])
+
+def _commercial_ok(model: dict) -> bool:
+    p = model.get("allowCommercialUse") or []
+    if isinstance(p, str): p = [p]
+    return "Sell" in p or "RentCivit" in p or "Image" in p or "Rent" in p
+
+def _has_blocked_terms(model: dict) -> bool:
+    name = (model.get("name") or "") + " " + (model.get("description") or "")
+    if any(p.search(name) for p in BLOCKLIST_NAME_PATTERNS):
+        return True
+    tags = {t.lower() for t in (model.get("tags") or [])}
+    return bool(tags & BLOCKLIST_TAGS)
+
+def _score(model: dict) -> float:
+    stats = model.get("stats") or {}
+    downloads = stats.get("downloadCount", 0)
+    rating = stats.get("rating", 0)
+    rating_count = stats.get("ratingCount", 0)
+    if rating_count < 5:
+        rating = 3.0  # uncertain, pull to neutral
+    updated = model.get("updatedAt") or model.get("createdAt")
+    age_days = 30
+    if updated:
+        try:
+            age_days = (datetime.utcnow() - datetime.fromisoformat(updated.replace("Z", ""))).days or 1
+        except Exception:
+            pass
+    recency = max(0.0, 1.0 - math.log10(age_days + 1) / 3)
+    commercial = 1.0 if _commercial_ok(model) else 0.0
+    return (math.log10(downloads + 1) * 0.4
+            + (rating / 5)            * 0.3
+            + recency                 * 0.2
+            + commercial              * 0.1)
+
+def rank(category: str, limit: int = 30) -> list[dict]:
+    """Return top LoRAs in a category, ranked + filtered."""
+    items = search(category, limit=limit * 2)
+    out = []
+    for m in items:
+        if _has_blocked_terms(m):
+            continue
+        # find the latest version with a .safetensors file
+        versions = m.get("modelVersions") or []
+        for v in versions:
+            files = v.get("files") or []
+            sft = next((f for f in files
+                        if f.get("name", "").endswith(".safetensors")
+                        and f.get("metadata", {}).get("format", "SafeTensor") != "PickleTensor"), None)
+            if sft:
+                out.append({
+                    "id": m["id"],
+                    "name": m["name"],
+                    "score": round(_score(m), 3),
+                    "downloads": (m.get("stats") or {}).get("downloadCount", 0),
+                    "rating": (m.get("stats") or {}).get("rating", 0),
+                    "commercial": _commercial_ok(m),
+                    "url": f"https://civitai.com/models/{m['id']}",
+                    "version_id": v["id"],
+                    "file_url": sft["downloadUrl"],
+                    "file_name": sft["name"],
+                    "file_sha256": (sft.get("hashes") or {}).get("SHA256"),
+                    "file_size_kb": sft.get("sizeKB", 0),
+                    "trigger_words": v.get("trainedWords") or [],
+                    "base_model": v.get("baseModel"),
+                    "license": m.get("license"),
+                })
+                break
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return out[:limit]
+
+def _load_registry() -> dict:
+    if REGISTRY.exists():
+        return json.loads(REGISTRY.read_text())
+    return {"installed": {}}
+
+def _save_registry(reg: dict):
+    REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    REGISTRY.write_text(json.dumps(reg, indent=2))
+
+def install(entry: dict, category: str) -> Path:
+    """Download + verify + log a LoRA. Returns local path."""
+    base_dir = COMFY_LORAS / category.replace("/", "_")
+    base_dir.mkdir(parents=True, exist_ok=True)
+    target = base_dir / entry["file_name"]
+    if target.exists():
+        print(f"[skip] {target.name} already present")
+    else:
+        print(f"[get] {entry['name']} -> {target}")
+        with requests.get(entry["file_url"], stream=True, headers=_headers(),
+                          allow_redirects=True, timeout=600) as r:
+            r.raise_for_status()
+            with open(target, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+        # verify SHA256 if known
+        if entry.get("file_sha256"):
+            h = hashlib.sha256(target.read_bytes()).hexdigest().upper()
+            if h != entry["file_sha256"].upper():
+                target.unlink()
+                raise RuntimeError(f"SHA256 mismatch on {entry['file_name']}")
+            print(f"   sha256 ok")
+    # log to registry
+    reg = _load_registry()
+    reg["installed"][str(target)] = {
+        "civitai_id":    entry["id"],
+        "civitai_url":   entry["url"],
+        "name":          entry["name"],
+        "category":      category,
+        "trigger_words": entry["trigger_words"],
+        "base_model":    entry["base_model"],
+        "license":       entry["license"],
+        "commercial":    entry["commercial"],
+        "sha256":        entry["file_sha256"],
+        "installed_at":  datetime.utcnow().isoformat() + "Z",
+    }
+    _save_registry(reg)
+    return target
+
+def list_installed() -> list[dict]:
+    reg = _load_registry()
+    return [{"path": p, **meta} for p, meta in reg["installed"].items()]
 PY
 
 sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/ollama_client.py" >/dev/null <<'PY'
@@ -562,6 +741,140 @@ if __name__ == "__main__":
     main(sys.argv[1], model)
 PY
 
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/20_lora.py" >/dev/null <<'PY'
+"""LoRA management via Civitai. Subcommands: search, install, list, refresh.
+
+Examples:
+    20_lora.py search video/motion-wan22
+    20_lora.py install <civitai_url_or_id> [category]
+    20_lora.py install-top <category> [n=5]
+    20_lora.py list
+    20_lora.py categories
+"""
+import sys, json, re
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import civitai
+
+def cmd_categories():
+    for k in civitai.CATEGORIES:
+        print(f"  {k}")
+
+def cmd_search(category: str, limit: int = 20):
+    ranked = civitai.rank(category, limit=limit)
+    if not ranked:
+        print(f"no results for {category}")
+        return
+    print(f"\nTop {len(ranked)} LoRAs for {category} (sorted by score):\n")
+    for i, e in enumerate(ranked, 1):
+        flag = " " if e["commercial"] else "!"  # ! = no commercial
+        print(f"  [{flag}] {i:2d}. {e['name'][:55]:55s}  score={e['score']:.2f}  dl={e['downloads']:>7}  id={e['id']}")
+        if e["trigger_words"]:
+            print(f"        triggers: {', '.join(e['trigger_words'][:5])}")
+        print(f"        {e['url']}")
+    print()
+    print("[!] = does NOT allow commercial use of generated images. Avoid for monetized YouTube.")
+
+def cmd_install(arg: str, category: str = None):
+    # accept full URL, /models/<id>, or just id
+    m = re.search(r"models/(\d+)", arg) or re.search(r"^(\d+)$", arg)
+    if not m:
+        print("usage: install <civitai_url_or_model_id> [category]")
+        return
+    mid = m.group(1)
+    # need a category to file it
+    if not category:
+        print("Need category. Available:")
+        cmd_categories()
+        return
+    # fetch model details to get latest .safetensors version
+    import requests
+    r = requests.get(f"{civitai.API}/models/{mid}", headers=civitai._headers(), timeout=30)
+    r.raise_for_status()
+    model = r.json()
+    if civitai._has_blocked_terms(model):
+        print(f"[blocked] {model['name']} matched blocklist (celebrity/likeness/risky)")
+        return
+    versions = model.get("modelVersions") or []
+    for v in versions:
+        files = v.get("files") or []
+        sft = next((f for f in files if f.get("name", "").endswith(".safetensors")), None)
+        if sft:
+            entry = {
+                "id": model["id"], "name": model["name"],
+                "score": civitai._score(model),
+                "downloads": (model.get("stats") or {}).get("downloadCount", 0),
+                "rating":    (model.get("stats") or {}).get("rating", 0),
+                "commercial": civitai._commercial_ok(model),
+                "url": f"https://civitai.com/models/{model['id']}",
+                "version_id": v["id"], "file_url": sft["downloadUrl"],
+                "file_name": sft["name"],
+                "file_sha256": (sft.get("hashes") or {}).get("SHA256"),
+                "trigger_words": v.get("trainedWords") or [],
+                "base_model": v.get("baseModel"),
+                "license": model.get("license"),
+            }
+            path = civitai.install(entry, category)
+            print(f"[ok] installed: {path}")
+            if entry["trigger_words"]:
+                print(f"     triggers: {', '.join(entry['trigger_words'])}")
+            if not entry["commercial"]:
+                print("     [!] commercial use NOT allowed by license")
+            return
+    print(f"no .safetensors version found for model {mid}")
+
+def cmd_install_top(category: str, n: int = 5):
+    ranked = civitai.rank(category, limit=n * 2)
+    installed = 0
+    for e in ranked:
+        if not e["commercial"]:
+            continue  # skip non-commercial for monetized YT safety
+        try:
+            civitai.install(e, category)
+            installed += 1
+            if installed >= n:
+                break
+        except Exception as ex:
+            print(f"  fail: {e['name']}: {ex}")
+    print(f"installed {installed} commercial-OK LoRAs in {category}")
+
+def cmd_list():
+    items = civitai.list_installed()
+    if not items:
+        print("no LoRAs installed via this tool")
+        return
+    by_cat = {}
+    for x in items:
+        by_cat.setdefault(x.get("category", "?"), []).append(x)
+    for cat, items in sorted(by_cat.items()):
+        print(f"\n{cat}:")
+        for x in items:
+            flag = " " if x.get("commercial") else "!"
+            triggers = ", ".join(x.get("trigger_words") or [])
+            print(f"  [{flag}] {x['name']}")
+            print(f"        triggers: {triggers}")
+            print(f"        {x['path']}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+    cmd = sys.argv[1]
+    if cmd == "categories":
+        cmd_categories()
+    elif cmd == "search":
+        cmd_search(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 20)
+    elif cmd == "install":
+        cmd_install(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+    elif cmd == "install-top":
+        cmd_install_top(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 5)
+    elif cmd == "list":
+        cmd_list()
+    else:
+        print(f"unknown subcommand: {cmd}")
+        print(__doc__)
+        sys.exit(1)
+PY
+
 sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/11_foley.py" >/dev/null <<'PY'
 """Hunyuan-Foley: add ambient/SFX audio to a video clip post-gen.
 Use when source model (Wan 2.2) didn't produce audio.
@@ -858,6 +1171,28 @@ foley slug prompt="ambient natural sound" shot_id="":
 lipsync slug ref_image audio transcript seconds="10":
     {{py}} {{stages}}/12_lipsync.py {{slug}} {{ref_image}} {{audio}} "{{transcript}}" {{seconds}}
 
+# --- LoRA management (Civitai) ---
+
+# show all category presets
+lora-categories:
+    {{py}} {{stages}}/20_lora.py categories
+
+# search top LoRAs in a category (e.g. video/motion-wan22)
+lora-search category limit="20":
+    {{py}} {{stages}}/20_lora.py search {{category}} {{limit}}
+
+# install a specific LoRA by Civitai URL or model id
+lora-install url category:
+    {{py}} {{stages}}/20_lora.py install {{url}} {{category}}
+
+# install top N commercial-OK LoRAs for a category
+lora-install-top category n="5":
+    {{py}} {{stages}}/20_lora.py install-top {{category}} {{n}}
+
+# list installed LoRAs (with trigger words)
+lora-list:
+    {{py}} {{stages}}/20_lora.py list
+
 # full pipeline (no voice)
 all slug:
     just render {{slug}}
@@ -990,8 +1325,22 @@ sudo -u "${SERVICE_USER}" tee -a "/var/lib/${SERVICE_USER}/.bashrc" >/dev/null <
 
 # videogen pipeline
 export PATH="/opt/videogen/.venv/bin:$PATH"
+
+# Civitai API key (paste yours here for early-access on Bronze+ tier).
+# Get from: https://civitai.com/user/account -> API Keys
+# Free tier works without this; paid tier benefits from it.
+# export CIVITAI_API_KEY=""
+
 cd /opt/videogen 2>/dev/null || true
 EOF
+
+# also create a placeholder secrets file user can populate
+sudo -u "${SERVICE_USER}" tee "/var/lib/${SERVICE_USER}/.civitai_env" >/dev/null <<'EOF'
+# Source this file or copy into ~/.bashrc to enable Civitai paid features.
+# Get key: https://civitai.com/user/account -> API Keys
+# CIVITAI_API_KEY=
+EOF
+sudo chmod 600 "/var/lib/${SERVICE_USER}/.civitai_env"
 
 cat <<EOF
 

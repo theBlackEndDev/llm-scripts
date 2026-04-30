@@ -142,11 +142,17 @@ grab("city96/Wan2.2-T2V-A14B-LowNoise-gguf",  f"Wan2.2-T2V-A14B-LowNoise-{wan_qu
 grab("city96/Wan2.2-I2V-A14B-HighNoise-gguf", f"Wan2.2-I2V-A14B-HighNoise-{wan_quant}.gguf", "diffusion_models")
 grab("city96/Wan2.2-I2V-A14B-LowNoise-gguf",  f"Wan2.2-I2V-A14B-LowNoise-{wan_quant}.gguf",  "diffusion_models")
 
-# ===== VIDEO: LTX 2.3 22B GGUF (gated on INSTALL_LTX env, needs 64GB+ system RAM) =====
+# ===== VIDEO: LTX 2.3 v1.1 22B GGUF (gated on INSTALL_LTX, needs 64GB+ system RAM) =====
+# v1.1 dropped late April 2026 (Tensor Alchemist breakdown):
+#   big jumps in spatial awareness, lighting/shadow control, style adherence.
+# Stick with GGUF on AMD (RDNA2 has no FP8 hardware, Sage Attention also unreliable).
 if "${INSTALL_LTX}" == "1":
     for variant, fname in [
-        ("LTX-Video-2.3-T2V-GGUF", "ltx-video-2.3-t2v-Q5_K_S.gguf"),
-        ("LTX-Video-2.3-I2V-GGUF", "ltx-video-2.3-i2v-Q5_K_S.gguf"),
+        ("LTX-Video-2.3-v1.1-T2V-GGUF", "ltx-video-2.3-v1.1-t2v-Q5_K_S.gguf"),
+        ("LTX-Video-2.3-v1.1-I2V-GGUF", "ltx-video-2.3-v1.1-i2v-Q5_K_S.gguf"),
+        # fallbacks if v1.1 repo names not yet posted with this exact path
+        ("LTX-Video-2.3-T2V-GGUF",      "ltx-video-2.3-t2v-Q5_K_S.gguf"),
+        ("LTX-Video-2.3-I2V-GGUF",      "ltx-video-2.3-i2v-Q5_K_S.gguf"),
     ]:
         for repo in [f"unsloth/{variant}", f"QuantStack/{variant}", f"Kijai/{variant}"]:
             try:
@@ -154,14 +160,14 @@ if "${INSTALL_LTX}" == "1":
                 break
             except Exception:
                 continue
-    for repo in ["Lightricks/LTX-Video-2.3", "Lightricks/LTX-Video"]:
+    for repo in ["Lightricks/LTX-Video-2.3-v1.1", "Lightricks/LTX-Video-2.3", "Lightricks/LTX-Video"]:
         try:
             grab(repo, "ltxv-vae.safetensors", "vae")
             break
         except Exception:
             continue
 else:
-    print("[skip] LTX 2.3 (set INSTALL_LTX=1 after 64GB+ system RAM upgrade)")
+    print("[skip] LTX 2.3 v1.1 (set INSTALL_LTX=1 after 64GB+ system RAM upgrade)")
 
 # ===== Wan video encoders/VAEs =====
 grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
@@ -266,7 +272,7 @@ cat <<EOF
 
  Models installed (depending on env flags):
    VIDEO: Wan 2.2 14B ${WAN_QUANT} (T2V+I2V high+low noise experts) -- primary
-          LTX 2.3 22B Q5_K_S (only if INSTALL_LTX=1; needs 64GB+ RAM)
+          LTX 2.3 v1.1 22B Q5_K_S (only if INSTALL_LTX=1; needs 64GB+ RAM)
    IMAGE: Flux.1 Krea Dev Q8 GGUF (photoreal, fixes plastic skin)
           SDXL base (fast iteration, huge LoRA library)
    MUSIC: MusicGen Stereo Large (primary for beats, ~7-8GB VRAM)

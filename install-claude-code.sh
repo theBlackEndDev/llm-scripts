@@ -92,7 +92,14 @@ Total: 16 GB. Concurrent steady-state max: Ollama + whisper = ~7 GB. ComfyUI ren
 **Video (open weights — Wan 2.5/2.6 are API-only, ignore):**
 - **Wan 2.2 14B Q4_K_M GGUF** — PRIMARY now (16GB RAM). Best motion realism. ~9GB file.
 - **Wan 2.2 14B Q5_K_M** — bump to this after 32GB RAM upgrade.
-- **LTX 2.3 22B Q5_K_S** — DEFER until 64GB+ RAM. Has native audio + 5.7x speedup but mmap pressure too high on small RAM. Re-run install-comfyui.sh with `INSTALL_LTX=1` after upgrade.
+- **LTX 2.3 v1.1 22B Q5_K_S** — DEFER until 64GB+ RAM. Native audio + 5.7x speedup. v1.1 (April 2026) is big improvement over base 2.3 in lighting, spatial awareness, style adherence. Re-run install-comfyui.sh with `INSTALL_LTX=1` after upgrade.
+
+**LTX 2.3 v1.1 prompting notes (per Tensor Alchemist breakdown):**
+- *Strong:* lighting/mood (blue hour, deep shadows), architectural prompts (specific window types), style (anime stays 2D), single-subject motion, slow camera moves
+- *Weak:* fingers melting into objects, big camera zooms on faces, fast multi-stage action, object permanence on motion, instant-shoe-appearance-on-landing
+- *Workarounds:* keep camera distant for movement scenes, single-subject focus, slower action, cut at weak moments
+- *On AMD 6900XT:* always GGUF (no FP8 hw, no Sage Attention support). Don't waste time on FP8 path.
+- *Order:* always interpolate FIRST, THEN upscale. Reverse = OOM on 16GB system RAM.
 
 **Image:**
 - **Flux.1 Krea Dev Q5/Q8 GGUF** — photoreal, fixes "plastic skin"

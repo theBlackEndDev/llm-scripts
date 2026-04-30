@@ -65,11 +65,13 @@ interpolate_to_fps = 32
 
 [workflows]
 # video — primary: LTX 2.3 (fast, audio). secondary: Wan 2.2 (motion realism)
-ltx_t2v    = "ltx23_t2v.json"
-ltx_i2v    = "ltx23_i2v.json"
-wan_t2v    = "wan22_t2v.json"
-wan_i2v    = "wan22_i2v.json"
-wan_flf2v  = "wan22_flf2v.json"
+ltx_t2v        = "ltx23_t2v.json"
+ltx_i2v        = "ltx23_i2v.json"
+ltx_lipsync    = "ltx23_lipsync.json"      # talking-head with synced lips (LTX Lip-Sync LoRA)
+wan_t2v        = "wan22_t2v.json"
+wan_i2v        = "wan22_i2v.json"
+wan_flf2v      = "wan22_flf2v.json"
+wan_5b_turbo   = "wan22_5b_turbo.json"     # native 1440p, 4-step turbo
 # legacy aliases (used by 03_render.py)
 t2v        = "ltx23_t2v.json"
 i2v        = "ltx23_i2v.json"
@@ -80,6 +82,8 @@ sdxl_t2i   = "sdxl_t2i.json"
 # music
 music_ace      = "music_ace_step.json"
 music_musicgen = "music_musicgen.json"
+# audio post (add SFX/ambient to existing video)
+foley          = "hunyuan_foley.json"
 
 [render.video_engine]
 # "ltx" (fast, audio) or "wan" (better motion). Pipeline picks workflow accordingly.
@@ -558,6 +562,103 @@ if __name__ == "__main__":
     main(sys.argv[1], model)
 PY
 
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/11_foley.py" >/dev/null <<'PY'
+"""Hunyuan-Foley: add ambient/SFX audio to a video clip post-gen.
+Use when source model (Wan 2.2) didn't produce audio.
+"""
+import sys, json, random, shutil
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def main(slug: str, prompt: str = "ambient", clip_id: str = None):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    src = pdir / "01_clips"
+    out_dir = pdir / "06_foley"
+    out_dir.mkdir(exist_ok=True)
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"]["foley"]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        return
+    targets = sorted(src.glob("shot_*.mp4")) if not clip_id else [src / f"shot_{clip_id}.mp4"]
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    for clip in targets:
+        if not clip.exists():
+            print(f"[skip] {clip.name} missing")
+            continue
+        seed = random.randint(1, 2**31 - 1)
+        raw = (wf_path.read_text()
+               .replace("__INPUT_VIDEO__", str(clip))
+               .replace("__PROMPT__", prompt)
+               .replace("__SEED__", str(seed)))
+        print(f"[foley] {clip.name}: {prompt[:60]}")
+        pid = client.queue(json.loads(raw))
+        history = client.wait(pid, timeout=900)
+        outs = client.collect_outputs(history, str(out_dir))
+        videos = [o for o in outs if o.endswith((".mp4", ".webm"))]
+        if videos:
+            target = out_dir / clip.name
+            shutil.move(videos[-1], target)
+            print(f"   -> {target}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("usage: 11_foley.py <slug> [prompt='ambient'] [shot_id]")
+        sys.exit(1)
+    prompt  = sys.argv[2] if len(sys.argv) > 2 else "ambient natural sound"
+    clip_id = sys.argv[3] if len(sys.argv) > 3 else None
+    main(sys.argv[1], prompt, clip_id)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/12_lipsync.py" >/dev/null <<'PY'
+"""LTX 2.3 Lip-Sync: talking head video with synchronized lips from voice.
+Requires: LTX 2.3 + LTX Lip-Sync LoRA installed (INSTALL_LTX=1).
+Inputs: reference image, narration audio file, transcript.
+Output: talking-head clip in projects/<slug>/07_lipsync/
+"""
+import sys, json, random, shutil
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def main(slug: str, ref_image: str, audio: str, transcript: str, seconds: int = 10):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    out_dir = pdir / "07_lipsync"
+    out_dir.mkdir(exist_ok=True)
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"]["ltx_lipsync"]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        print("      after INSTALL_LTX=1 setup, build lipsync workflow in ComfyUI UI")
+        return
+    seed = random.randint(1, 2**31 - 1)
+    raw = (wf_path.read_text()
+           .replace("__REF_IMAGE__", ref_image)
+           .replace("__AUDIO__", audio)
+           .replace("__TRANSCRIPT__", transcript)   # appended to prompt for sync
+           .replace("__SEED__", str(seed))
+           .replace("__SECONDS__", str(seconds)))
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    pid = client.queue(json.loads(raw))
+    history = client.wait(pid, timeout=2400)
+    outs = client.collect_outputs(history, str(out_dir))
+    videos = [o for o in outs if o.endswith((".mp4", ".webm"))]
+    if videos:
+        target = out_dir / f"talking_{seed}.mp4"
+        shutil.move(videos[-1], target)
+        print(f"[ok] {target}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 5:
+        print("usage: 12_lipsync.py <slug> <ref_image> <audio_wav> <transcript> [seconds]")
+        sys.exit(1)
+    secs = int(sys.argv[5]) if len(sys.argv) > 5 else 10
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], secs)
+PY
+
 sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/10_music.py" >/dev/null <<'PY'
 """Generate background music via ACE-Step 1.5 (or MusicGen for short beds).
 Output: projects/<slug>/05_music/track.wav
@@ -749,6 +850,14 @@ storyboard-imgs slug model="flux":
 music slug prompt seconds="60" model="musicgen":
     {{py}} {{stages}}/10_music.py {{slug}} "{{prompt}}" {{seconds}} {{model}}
 
+# add ambient/SFX audio to existing video clips via Hunyuan-Foley
+foley slug prompt="ambient natural sound" shot_id="":
+    {{py}} {{stages}}/11_foley.py {{slug}} "{{prompt}}" {{shot_id}}
+
+# talking-head lip-sync (LTX 2.3 + Lip-Sync LoRA, requires INSTALL_LTX=1)
+lipsync slug ref_image audio transcript seconds="10":
+    {{py}} {{stages}}/12_lipsync.py {{slug}} {{ref_image}} {{audio}} "{{transcript}}" {{seconds}}
+
 # full pipeline (no voice)
 all slug:
     just render {{slug}}
@@ -817,7 +926,11 @@ chmod 440 /etc/sudoers.d/videogen-services
 
 # ---- workflow placeholders ----
 log "Workflow placeholders (export real ones from ComfyUI UI)"
-for f in ltx23_t2v.json ltx23_i2v.json wan22_t2v.json wan22_i2v.json wan22_flf2v.json flux_krea_t2i.json sdxl_t2i.json music_ace_step.json music_musicgen.json; do
+for f in \
+    ltx23_t2v.json ltx23_i2v.json ltx23_lipsync.json \
+    wan22_t2v.json wan22_i2v.json wan22_flf2v.json wan22_5b_turbo.json \
+    flux_krea_t2i.json sdxl_t2i.json \
+    music_ace_step.json music_musicgen.json hunyuan_foley.json; do
     if [[ ! -f "${INSTALL_DIR}/workflows/${f}" ]]; then
         sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/workflows/${f}" >/dev/null <<EOF
 {

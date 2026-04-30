@@ -96,10 +96,48 @@ Total: 16 GB. Concurrent steady-state max: Ollama + whisper = ~7 GB. ComfyUI ren
 
 **LTX 2.3 v1.1 prompting notes (per Tensor Alchemist breakdown):**
 - *Strong:* lighting/mood (blue hour, deep shadows), architectural prompts (specific window types), style (anime stays 2D), single-subject motion, slow camera moves
-- *Weak:* fingers melting into objects, big camera zooms on faces, fast multi-stage action, object permanence on motion, instant-shoe-appearance-on-landing
+- *Weak:* fingers melting into objects, big camera zooms on faces, fast multi-stage action, object permanence on motion
 - *Workarounds:* keep camera distant for movement scenes, single-subject focus, slower action, cut at weak moments
-- *On AMD 6900XT:* always GGUF (no FP8 hw, no Sage Attention support). Don't waste time on FP8 path.
+- *On AMD 6900XT:* always GGUF (no FP8 hw, no Sage Attention support).
 - *Order:* always interpolate FIRST, THEN upscale. Reverse = OOM on 16GB system RAM.
+- *Long clips:* use Tile VAE Decode `tile_size=128, overlap=32` for 30s+ clips
+- *Talking-head:* add LTX Lip-Sync LoRA + end prompt with speech transcript
+
+## Per-model sampler settings (Tensor Alchemist's tested values)
+
+**Wan 2.2 14B GGUF (T2V/I2V):**
+- Use both high+low noise model files
+- Lightning 4-step LoRA baked into newer checkpoints (skip extra LoRA)
+- 640p OK on 16GB; 720p+ comfortable on 16GB our box (was 8GB OOM for him)
+
+**Wan 2.2 5B Turbo Q8 GGUF (native 1440p):**
+- 4 steps, CFG=1
+- `model_sampling.shift = 5` (default 8)
+- Sampler: SS solver (UniPC fallback)
+- Scheduler: beta
+- NAG node: `energy_scale = 35` (boosts neg prompt at low CFG)
+
+**LTX 2.3 v1.1:**
+- 8 steps, CFG=1, sampler `euler_ancestral`
+- Tile VAE: tile=128, overlap=32 for long clips
+- Audio VAE goes in `checkpoints/` (not `vae/`)
+
+**ACE-Step 1.5 (music with vocals):**
+- 8 steps, CFG=1, sampler LCM, scheduler beta 57
+- 130 BPM common starting point
+
+**Universal NAG trick:** any time CFG=1 (turbo/distilled), add NAG node with `energy_scale=35` to keep negative prompt effective.
+
+## Wan 2.2 + audio (no native audio support)
+
+Wan 2.2 generates silent video. Add audio via Hunyuan-Foley separately:
+
+```bash
+just render mythvid                            # silent clips
+just foley mythvid "rain on pavement, distant traffic"   # adds ambient
+```
+
+Strong on ambient/SFX. Use specific audio descriptions, not just "audio".
 
 **Image:**
 - **Flux.1 Krea Dev Q5/Q8 GGUF** — photoreal, fixes "plastic skin"
@@ -133,7 +171,9 @@ just render <slug>                    # ComfyUI Wan 2.2 chain (uses stills as I2
 just interpolate <slug>               # 16->32fps
 just upscale <slug>                   # -> 1080p
 just voice <slug> <ref_wav> "ref"     # GPT-SoVITS narration
-just music <slug> "<prompt>" 60       # ACE-Step background track (60s)
+just music <slug> "<prompt>" 60       # MusicGen instrumental beats (default)
+just foley <slug> "ambient sound"     # Hunyuan-Foley adds SFX/ambient to video clips
+just lipsync <slug> <img> <wav> "txt" # LTX 2.3 talking-head lip sync (needs INSTALL_LTX)
 just mux <slug>                       # -> projects/<slug>/final.mp4 (mixes voice+music)
 just thumbnail <slug> "<prompt>"      # YouTube thumbnail via Flux Krea
 just all-img <slug>                   # storyboard-imgs + render + interp + upscale + mux

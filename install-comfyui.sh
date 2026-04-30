@@ -94,6 +94,10 @@ clone_or_pull https://github.com/cubiq/ComfyUI_essentials.git ComfyUI_essentials
 clone_or_pull https://github.com/rgthree/rgthree-comfy.git rgthree-comfy
 clone_or_pull https://github.com/ace-step/ComfyUI-ACE-Step.git ComfyUI-ACE-Step
 clone_or_pull https://github.com/a-r-r-o-w/ComfyUI-MusicGen.git ComfyUI-MusicGen || true
+# NAG node — boosts negative prompt at low CFG (turbo/distilled models)
+clone_or_pull https://github.com/ChenDarYen/ComfyUI-NAG.git ComfyUI-NAG || true
+# Hunyuan-Foley — add audio to existing Wan video clips
+clone_or_pull https://github.com/if-ai/ComfyUI-IF_HunyuanFoley.git ComfyUI-IF_HunyuanFoley || true
 
 # install per-node deps
 source "${INSTALL_DIR}/.venv/bin/activate"
@@ -142,6 +146,12 @@ grab("city96/Wan2.2-T2V-A14B-LowNoise-gguf",  f"Wan2.2-T2V-A14B-LowNoise-{wan_qu
 grab("city96/Wan2.2-I2V-A14B-HighNoise-gguf", f"Wan2.2-I2V-A14B-HighNoise-{wan_quant}.gguf", "diffusion_models")
 grab("city96/Wan2.2-I2V-A14B-LowNoise-gguf",  f"Wan2.2-I2V-A14B-LowNoise-{wan_quant}.gguf",  "diffusion_models")
 
+# ===== VIDEO: Wan 2.2 5B Turbo Q8 GGUF (native 1440p! per Tensor Alchemist) =====
+# 4-step distilled. CFG=1, shift=5, SS solver, beta scheduler, NAG energy_scale=35.
+grab("city96/Wan2.2-T2V-5B-Turbo-gguf", "Wan2.2-T2V-5B-Turbo-Q8_0.gguf", "diffusion_models")
+# Lightning 4-step LoRA (often baked in; download separately as fallback)
+grab("Kijai/WanVideo_comfy", "Wan2_2-Lightning-LoRA-rank32.safetensors", "loras")
+
 # ===== VIDEO: LTX 2.3 v1.1 22B GGUF (gated on INSTALL_LTX, needs 64GB+ system RAM) =====
 # v1.1 dropped late April 2026 (Tensor Alchemist breakdown):
 #   big jumps in spatial awareness, lighting/shadow control, style adherence.
@@ -168,6 +178,23 @@ if "${INSTALL_LTX}" == "1":
             continue
 else:
     print("[skip] LTX 2.3 v1.1 (set INSTALL_LTX=1 after 64GB+ system RAM upgrade)")
+
+# ===== VIDEO LoRA: LTX 2.3 Lip-Sync LoRA (talking head w/ synced lips from voice) =====
+# First community AV LoRA for LTX 2.3. End your prompt with the speech transcript.
+if "${INSTALL_LTX}" == "1":
+    for repo in [
+        "Lightricks/LTXV-Lipsync-LoRA",
+        "Kijai/LTX-Video-LipSync-LoRA",
+    ]:
+        try:
+            grab(repo, "ltxv-lipsync-lora.safetensors", "loras")
+            break
+        except Exception:
+            continue
+
+# ===== AUDIO: Hunyuan-Foley (adds audio to Wan 2.2 video clips post-gen) =====
+# Separate workflow to avoid OOM. ~2-3min/clip on 8GB. Strong on ambient sound.
+grab("Tencent/HunyuanVideo-Foley", "hunyuan_video_foley.safetensors", "audio_models")
 
 # ===== Wan video encoders/VAEs =====
 grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
@@ -272,12 +299,16 @@ cat <<EOF
 
  Models installed (depending on env flags):
    VIDEO: Wan 2.2 14B ${WAN_QUANT} (T2V+I2V high+low noise experts) -- primary
+          Wan 2.2 5B Turbo Q8 GGUF (native 1440p, 4-step turbo) -- fast iter
           LTX 2.3 v1.1 22B Q5_K_S (only if INSTALL_LTX=1; needs 64GB+ RAM)
+          + LTX Lip-Sync LoRA (talking heads, only if INSTALL_LTX=1)
+          + Wan Lightning 4-step LoRA
    IMAGE: Flux.1 Krea Dev Q8 GGUF (photoreal, fixes plastic skin)
           SDXL base (fast iteration, huge LoRA library)
    MUSIC: MusicGen Stereo Large (primary for beats, ~7-8GB VRAM)
           MusicGen Stereo Medium (lighter fallback, ~3-4GB VRAM)
           ACE-Step 1.5 3.5B (alt, full-song style, royalty-free)
+   AUDIO: Hunyuan-Foley (add ambient/SFX to existing Wan clips post-gen)
    ENC:   umt5-xxl-fp8 (Wan), t5-v1_1-xxl-Q8 (Flux/LTX), clip_l, clip_vision_h
    VAE:   wan_2.1_vae, ltxv-vae, ae (Flux), sdxl_vae
    UPS:   Real-ESRGAN x2/x4

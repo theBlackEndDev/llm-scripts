@@ -1,0 +1,898 @@
+#!/usr/bin/env bash
+# Videogen pipeline package — orchestrates ComfyUI + GPT-SoVITS + Ollama + ffmpeg
+# Installs to /opt/videogen with Justfile + Python orchestrator.
+
+set -euo pipefail
+
+readonly INSTALL_DIR="/opt/videogen"
+readonly SERVICE_USER="videogen"
+
+log() { printf '\033[1;34m[+]\033[0m %s\n' "$*"; }
+err() { printf '\033[1;31m[X]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || err "Run with sudo."
+
+# ---- deps ----
+log "Deps"
+apt-get update
+apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip \
+    ffmpeg curl jq just tmux git
+
+# ---- service user (real user, login enabled — owns projects) ----
+log "User '${SERVICE_USER}'"
+if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "${SERVICE_USER}"
+fi
+
+# ---- skeleton ----
+log "Building skeleton at ${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}"/{pipeline/{stages,lib},workflows,projects,scripts}
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
+
+# ---- venv ----
+log "Python venv + libs"
+sudo -u "${SERVICE_USER}" bash <<'EOF'
+set -euo pipefail
+cd /opt/videogen
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip wheel
+pip install requests websocket-client tomli tomli-w pillow rich typer
+EOF
+
+# ---- config.toml ----
+log "config.toml"
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/config.toml" >/dev/null <<'EOF'
+[hosts]
+comfyui     = "http://127.0.0.1:8188"
+ollama      = "http://127.0.0.1:11434"
+sovits_api  = "http://127.0.0.1:9880"   # gpt-sovits api server (optional)
+whisper     = "http://127.0.0.1:9000"
+
+[models]
+script_llm   = "qwen2.5:9b"
+tts_model    = "v4"
+wan_quant    = "Q5_K_M"
+
+[render]
+default_resolution = "832x480"   # FoxtonAI sweet spot for sub-32GB
+default_fps        = 16
+default_steps      = 22
+default_clip_secs  = 5
+upscale_factor     = 2
+interpolate_to_fps = 32
+
+[workflows]
+# video — primary: LTX 2.3 (fast, audio). secondary: Wan 2.2 (motion realism)
+ltx_t2v    = "ltx23_t2v.json"
+ltx_i2v    = "ltx23_i2v.json"
+wan_t2v    = "wan22_t2v.json"
+wan_i2v    = "wan22_i2v.json"
+wan_flf2v  = "wan22_flf2v.json"
+# legacy aliases (used by 03_render.py)
+t2v        = "ltx23_t2v.json"
+i2v        = "ltx23_i2v.json"
+flf2v      = "wan22_flf2v.json"
+# image
+flux_t2i   = "flux_krea_t2i.json"
+sdxl_t2i   = "sdxl_t2i.json"
+# music
+music_ace      = "music_ace_step.json"
+music_musicgen = "music_musicgen.json"
+
+[render.video_engine]
+# "ltx" (fast, audio) or "wan" (better motion). Pipeline picks workflow accordingly.
+default = "ltx"
+
+[paths]
+projects   = "/opt/videogen/projects"
+workflows  = "/opt/videogen/workflows"
+EOF
+
+# ---- ComfyUI client lib ----
+log "Pipeline libs"
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/__init__.py" >/dev/null <<'EOF'
+EOF
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/comfy_client.py" >/dev/null <<'PY'
+"""Minimal ComfyUI API client: queue prompt, wait, fetch outputs."""
+import json, time, uuid, os
+import requests
+import websocket
+
+
+class ComfyClient:
+    def __init__(self, base_url: str):
+        self.base = base_url.rstrip("/")
+        self.cid = str(uuid.uuid4())
+
+    def queue(self, workflow: dict) -> str:
+        r = requests.post(f"{self.base}/prompt",
+                          json={"prompt": workflow, "client_id": self.cid},
+                          timeout=30)
+        r.raise_for_status()
+        return r.json()["prompt_id"]
+
+    def wait(self, prompt_id: str, timeout: int = 3600) -> dict:
+        ws_url = self.base.replace("http", "ws") + f"/ws?clientId={self.cid}"
+        ws = websocket.WebSocket()
+        ws.connect(ws_url, timeout=10)
+        deadline = time.time() + timeout
+        try:
+            while time.time() < deadline:
+                msg = ws.recv()
+                if not isinstance(msg, str):
+                    continue
+                evt = json.loads(msg)
+                if evt.get("type") == "executing":
+                    d = evt.get("data") or {}
+                    if d.get("node") is None and d.get("prompt_id") == prompt_id:
+                        break
+        finally:
+            ws.close()
+        h = requests.get(f"{self.base}/history/{prompt_id}", timeout=30).json()
+        return h.get(prompt_id, {})
+
+    def download_output(self, item: dict, out_dir: str) -> str:
+        params = {
+            "filename": item["filename"],
+            "subfolder": item.get("subfolder", ""),
+            "type":      item.get("type", "output"),
+        }
+        r = requests.get(f"{self.base}/view", params=params, stream=True, timeout=120)
+        r.raise_for_status()
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, item["filename"])
+        with open(path, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+        return path
+
+    def collect_outputs(self, history: dict, out_dir: str) -> list[str]:
+        out = []
+        for node_id, node_out in (history.get("outputs") or {}).items():
+            for key in ("gifs", "videos", "images"):
+                for item in node_out.get(key, []) or []:
+                    out.append(self.download_output(item, out_dir))
+        return out
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/config.py" >/dev/null <<'PY'
+import tomli, os
+from pathlib import Path
+
+ROOT = Path("/opt/videogen")
+CONFIG_PATH = ROOT / "pipeline" / "config.toml"
+
+def load() -> dict:
+    with open(CONFIG_PATH, "rb") as f:
+        return tomli.load(f)
+
+def project_dir(slug: str) -> Path:
+    p = ROOT / "projects" / slug
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/lib/ollama_client.py" >/dev/null <<'PY'
+import requests
+
+def chat(base: str, model: str, system: str, user: str, max_tokens: int = 2000) -> str:
+    r = requests.post(f"{base}/v1/chat/completions",
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        },
+        timeout=600,
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
+PY
+
+# ---- stages ----
+log "Pipeline stages"
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/01_script.py" >/dev/null <<'PY'
+"""Draft script via local Qwen. Output: projects/<slug>/script.md"""
+import sys
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config, ollama_client
+
+def main(slug: str, topic: str, duration_seconds: int = 90):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    sys_prompt = (
+        "You write tight, conversational YouTube narration scripts. "
+        "Plain prose only. No headers, no bullet points. "
+        "Target spoken pacing: ~150 wpm."
+    )
+    target_words = int(duration_seconds * 150 / 60)
+    user = f"Topic: {topic}\nTarget length: ~{target_words} words ({duration_seconds}s spoken).\nWrite the script."
+    text = ollama_client.chat(cfg["hosts"]["ollama"], cfg["models"]["script_llm"], sys_prompt, user)
+    out = pdir / "script.md"
+    out.write_text(text.strip() + "\n")
+    print(f"[ok] {out}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("usage: 01_script.py <slug> <topic> [seconds]")
+        sys.exit(1)
+    secs = int(sys.argv[3]) if len(sys.argv) > 3 else 90
+    main(sys.argv[1], sys.argv[2], secs)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/02_storyboard.py" >/dev/null <<'PY'
+"""Split script into shotlist (per-clip prompts). Output: projects/<slug>/shots.toml"""
+import sys, json, re
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config, ollama_client
+import tomli_w
+
+def main(slug: str, clip_secs: int = 5):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    script = (pdir / "script.md").read_text()
+    sys_prompt = (
+        "Convert the following narration into a sequential shot list for a video. "
+        "Each shot should be ~{secs} seconds. "
+        "Output strict JSON: a list of objects with keys: "
+        "id (zero-padded 02d), prompt (visual description, NO dialogue, NO text-on-screen), "
+        "narration (text spoken during this shot), seconds (int)."
+    ).format(secs=clip_secs)
+    raw = ollama_client.chat(cfg["hosts"]["ollama"], cfg["models"]["script_llm"], sys_prompt, script, max_tokens=4000)
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        raise RuntimeError(f"no JSON list in LLM output:\n{raw}")
+    shots = json.loads(m.group(0))
+    out = pdir / "shots.toml"
+    with open(out, "wb") as f:
+        tomli_w.dump({"shots": shots}, f)
+    print(f"[ok] {out}  ({len(shots)} shots)")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("usage: 02_storyboard.py <slug> [clip_secs]")
+        sys.exit(1)
+    secs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    main(sys.argv[1], secs)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/03_render.py" >/dev/null <<'PY'
+"""Render shots via ComfyUI. Uses T2V for shot 0, FLF2V chain after.
+Workflow JSONs must exist in /opt/videogen/workflows/ — export from ComfyUI UI.
+Each workflow is expected to have placeholders: __PROMPT__, __SEED__, __FRAMES__, __WIDTH__, __HEIGHT__, __FPS__, __FIRST_FRAME__, __LAST_FRAME__.
+"""
+import sys, json, random, tomli, shutil, subprocess
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def load_wf(path: Path, replacements: dict) -> dict:
+    raw = path.read_text()
+    for k, v in replacements.items():
+        raw = raw.replace(k, str(v))
+    return json.loads(raw)
+
+def extract_last_frame(video: Path, out_png: Path):
+    subprocess.run(
+        ["ffmpeg", "-y", "-sseof", "-0.1", "-i", str(video),
+         "-update", "1", "-frames:v", "1", str(out_png)],
+        check=True, capture_output=True,
+    )
+
+def main(slug: str, only_shot: str = None):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    shots = tomli.loads((pdir / "shots.toml").read_text())["shots"]
+    out_dir = pdir / "01_clips"
+    out_dir.mkdir(exist_ok=True)
+    last_frames_dir = pdir / "01_clips" / "_last_frames"
+    last_frames_dir.mkdir(exist_ok=True)
+
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    wf_dir  = Path(cfg["paths"]["workflows"])
+    res     = cfg["render"]["default_resolution"].split("x")
+    width, height = int(res[0]), int(res[1])
+    fps     = cfg["render"]["default_fps"]
+
+    prev_last = None
+    for i, shot in enumerate(shots):
+        sid = shot["id"]
+        if only_shot and sid != only_shot:
+            if (out_dir / f"shot_{sid}.mp4").exists():
+                prev_last = last_frames_dir / f"shot_{sid}_last.png"
+                if not prev_last.exists():
+                    extract_last_frame(out_dir / f"shot_{sid}.mp4", prev_last)
+            continue
+        secs   = int(shot.get("seconds", cfg["render"]["default_clip_secs"]))
+        frames = secs * fps
+        seed   = random.randint(1, 2**31 - 1)
+
+        if i == 0 or prev_last is None:
+            wf_path = wf_dir / cfg["workflows"]["t2v"]
+            replacements = {
+                "__PROMPT__": shot["prompt"], "__SEED__": seed,
+                "__FRAMES__": frames, "__WIDTH__": width, "__HEIGHT__": height,
+                "__FPS__": fps,
+            }
+        else:
+            wf_path = wf_dir / cfg["workflows"]["i2v"]
+            replacements = {
+                "__PROMPT__": shot["prompt"], "__SEED__": seed,
+                "__FRAMES__": frames, "__WIDTH__": width, "__HEIGHT__": height,
+                "__FPS__": fps, "__FIRST_FRAME__": str(prev_last),
+            }
+
+        if not wf_path.exists():
+            print(f"[warn] workflow missing: {wf_path}  — skipping shot {sid}")
+            print(f"        export your workflow from ComfyUI UI and save as {wf_path.name}")
+            continue
+
+        print(f"[render] shot {sid}  ({secs}s @ {width}x{height})  prompt={shot['prompt'][:60]}...")
+        wf = load_wf(wf_path, replacements)
+        pid = client.queue(wf)
+        history = client.wait(pid)
+        outs = client.collect_outputs(history, str(out_dir))
+        # pick first .mp4 / .webm output
+        videos = [o for o in outs if o.endswith((".mp4", ".webm", ".gif"))]
+        if not videos:
+            print(f"[warn] no video output for shot {sid}: {outs}")
+            continue
+        final = out_dir / f"shot_{sid}.mp4"
+        shutil.move(videos[0], final)
+        prev_last = last_frames_dir / f"shot_{sid}_last.png"
+        extract_last_frame(final, prev_last)
+        print(f"   -> {final}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("usage: 03_render.py <slug> [shot_id]")
+        sys.exit(1)
+    only = sys.argv[2] if len(sys.argv) > 2 else None
+    main(sys.argv[1], only)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/04_interpolate.py" >/dev/null <<'PY'
+"""RIFE-style frame interpolation via ffmpeg minterpolate (CPU fallback).
+For ComfyUI-side RIFE, use a render workflow that bakes it in."""
+import sys, subprocess
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+
+def main(slug: str):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    src  = pdir / "01_clips"
+    dst  = pdir / "02_interpolated"
+    dst.mkdir(exist_ok=True)
+    target_fps = cfg["render"]["interpolate_to_fps"]
+    for clip in sorted(src.glob("shot_*.mp4")):
+        out = dst / clip.name
+        print(f"[interp] {clip.name} -> {target_fps}fps")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(clip),
+            "-vf", f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:vsbmc=1",
+            "-c:v", "libx264", "-crf", "16", "-preset", "fast", str(out),
+        ], check=True, capture_output=True)
+    print(f"[ok] {dst}")
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/05_upscale.py" >/dev/null <<'PY'
+"""Upscale via ffmpeg lanczos (fast, CPU). Replace with Real-ESRGAN node in ComfyUI for higher quality."""
+import sys, subprocess
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+
+def main(slug: str, target_w: int = 1920, target_h: int = 1080):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    src  = pdir / "02_interpolated"
+    if not src.exists():
+        src = pdir / "01_clips"
+    dst  = pdir / "03_upscaled"
+    dst.mkdir(exist_ok=True)
+    for clip in sorted(src.glob("shot_*.mp4")):
+        out = dst / clip.name
+        print(f"[upscale] {clip.name} -> {target_w}x{target_h}")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(clip),
+            "-vf", f"scale={target_w}:{target_h}:flags=lanczos",
+            "-c:v", "libx264", "-crf", "16", "-preset", "fast", str(out),
+        ], check=True, capture_output=True)
+    print(f"[ok] {dst}")
+
+if __name__ == "__main__":
+    target_w = int(sys.argv[2]) if len(sys.argv) > 2 else 1920
+    target_h = int(sys.argv[3]) if len(sys.argv) > 3 else 1080
+    main(sys.argv[1], target_w, target_h)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/06_voice.py" >/dev/null <<'PY'
+"""Generate per-shot narration via GPT-SoVITS API. Falls back to a stub if API not running.
+GPT-SoVITS 'api_v2' or 'api' server must be started separately:
+  cd /opt/GPT-SoVITS && .venv/bin/python api_v2.py
+"""
+import sys, requests, tomli
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+
+def main(slug: str, ref_wav: str, ref_text: str):
+    cfg  = config.load()
+    pdir = config.project_dir(slug)
+    shots = tomli.loads((pdir / "shots.toml").read_text())["shots"]
+    out_dir = pdir / "04_audio"
+    out_dir.mkdir(exist_ok=True)
+    for s in shots:
+        text = s.get("narration", "").strip()
+        if not text:
+            continue
+        out = out_dir / f"shot_{s['id']}.wav"
+        print(f"[tts] shot {s['id']}: {text[:60]}...")
+        r = requests.post(
+            cfg["hosts"]["sovits_api"] + "/tts",
+            json={
+                "text": text, "text_lang": "en",
+                "ref_audio_path": ref_wav, "prompt_text": ref_text, "prompt_lang": "en",
+                "media_type": "wav", "streaming_mode": False,
+            },
+            timeout=600,
+        )
+        r.raise_for_status()
+        out.write_bytes(r.content)
+    print(f"[ok] {out_dir}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 4:
+        print("usage: 06_voice.py <slug> <ref_wav> <ref_text>")
+        sys.exit(1)
+    main(sys.argv[1], sys.argv[2], sys.argv[3])
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/08_thumbnail.py" >/dev/null <<'PY'
+"""Generate YouTube thumbnail (1920x1080) via Flux Krea."""
+import sys, json, random, shutil
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def main(slug: str, prompt: str, model: str = "flux"):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    out_dir = pdir / "thumbnails"
+    out_dir.mkdir(exist_ok=True)
+    wf_key = "flux_t2i" if model == "flux" else "sdxl_t2i"
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"][wf_key]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        print(f"      export from ComfyUI UI (API Format) and save it there")
+        return
+    raw = wf_path.read_text()
+    seed = random.randint(1, 2**31 - 1)
+    raw = raw.replace("__PROMPT__", prompt).replace("__SEED__", str(seed))
+    raw = raw.replace("__WIDTH__", "1920").replace("__HEIGHT__", "1080")
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    pid = client.queue(json.loads(raw))
+    history = client.wait(pid)
+    outs = client.collect_outputs(history, str(out_dir))
+    images = [o for o in outs if o.endswith((".png", ".jpg", ".webp"))]
+    if images:
+        latest = out_dir / "thumbnail.png"
+        shutil.copy(images[-1], latest)
+        print(f"[ok] {latest}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("usage: 08_thumbnail.py <slug> <prompt> [flux|sdxl]")
+        sys.exit(1)
+    model = sys.argv[3] if len(sys.argv) > 3 else "flux"
+    main(sys.argv[1], sys.argv[2], model)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/09_storyboard_imgs.py" >/dev/null <<'PY'
+"""Generate one reference still per shot via Flux/SDXL.
+Used as I2V starting frame for higher-quality video gen than pure T2V.
+Output: projects/<slug>/storyboard/shot_<id>.png
+"""
+import sys, json, random, shutil, tomli
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def main(slug: str, model: str = "flux"):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    shots = tomli.loads((pdir / "shots.toml").read_text())["shots"]
+    out_dir = pdir / "storyboard"
+    out_dir.mkdir(exist_ok=True)
+    wf_key = "flux_t2i" if model == "flux" else "sdxl_t2i"
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"][wf_key]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        return
+    raw_template = wf_path.read_text()
+    res = cfg["render"]["default_resolution"].split("x")
+    w, h = res[0], res[1]
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    for shot in shots:
+        sid = shot["id"]
+        target = out_dir / f"shot_{sid}.png"
+        if target.exists():
+            print(f"[skip] {target.name} exists")
+            continue
+        seed = random.randint(1, 2**31 - 1)
+        raw = (raw_template
+               .replace("__PROMPT__", shot["prompt"])
+               .replace("__SEED__", str(seed))
+               .replace("__WIDTH__", w).replace("__HEIGHT__", h))
+        print(f"[img] shot {sid}: {shot['prompt'][:60]}...")
+        pid = client.queue(json.loads(raw))
+        history = client.wait(pid)
+        outs = client.collect_outputs(history, str(out_dir))
+        images = [o for o in outs if o.endswith((".png", ".jpg", ".webp"))]
+        if images:
+            shutil.move(images[-1], target)
+            print(f"   -> {target}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("usage: 09_storyboard_imgs.py <slug> [flux|sdxl]")
+        sys.exit(1)
+    model = sys.argv[2] if len(sys.argv) > 2 else "flux"
+    main(sys.argv[1], model)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/10_music.py" >/dev/null <<'PY'
+"""Generate background music via ACE-Step 1.5 (or MusicGen for short beds).
+Output: projects/<slug>/05_music/track.wav
+"""
+import sys, json, random, shutil
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+def main(slug: str, prompt: str, seconds: int = 60, model: str = "musicgen"):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    out_dir = pdir / "05_music"
+    out_dir.mkdir(exist_ok=True)
+    # default = musicgen (beats focused). use 'ace' for full-song style.
+    wf_key = "music_musicgen" if model in ("musicgen", "mg", "beat") else "music_ace"
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"][wf_key]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        print("      export from ComfyUI UI (API Format)")
+        return
+    raw = wf_path.read_text()
+    seed = random.randint(1, 2**31 - 1)
+    raw = (raw
+           .replace("__PROMPT__", prompt)
+           .replace("__SEED__", str(seed))
+           .replace("__SECONDS__", str(seconds))
+           .replace("__DURATION__", str(seconds)))
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    pid = client.queue(json.loads(raw))
+    history = client.wait(pid, timeout=1800)
+    outs = client.collect_outputs(history, str(out_dir))
+    audio = [o for o in outs if o.endswith((".wav", ".mp3", ".flac", ".ogg"))]
+    if audio:
+        target = out_dir / "track.wav"
+        shutil.move(audio[-1], target)
+        print(f"[ok] {target}")
+    else:
+        print(f"[warn] no audio output: {outs}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("usage: 10_music.py <slug> <prompt> [seconds=60] [musicgen|ace]")
+        sys.exit(1)
+    secs = int(sys.argv[3]) if len(sys.argv) > 3 else 60
+    model = sys.argv[4] if len(sys.argv) > 4 else "musicgen"
+    main(sys.argv[1], sys.argv[2], secs, model)
+PY
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/07_mux.py" >/dev/null <<'PY'
+"""Concat clips, mix narration + background music, normalize loudness."""
+import sys, subprocess
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+
+def main(slug: str):
+    cfg  = config.load()
+    pdir = config.project_dir(slug)
+    src_dir = pdir / "03_upscaled"
+    if not src_dir.exists():
+        src_dir = pdir / "02_interpolated"
+    if not src_dir.exists():
+        src_dir = pdir / "01_clips"
+    narr_dir = pdir / "04_audio"
+    music_track = pdir / "05_music" / "track.wav"
+
+    clips = sorted(src_dir.glob("shot_*.mp4"))
+    if not clips:
+        raise SystemExit(f"no clips in {src_dir}")
+
+    # 1) concat video
+    list_file = pdir / "_concat.txt"
+    list_file.write_text("".join(f"file '{c}'\n" for c in clips))
+    video_concat = pdir / "_video.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+        "-c", "copy", str(video_concat),
+    ], check=True)
+
+    # 2) concat narration if any
+    narr_concat = None
+    if narr_dir.exists():
+        narr_clips = sorted(narr_dir.glob("shot_*.wav"))
+        if narr_clips:
+            alist = pdir / "_alist.txt"
+            alist.write_text("".join(f"file '{a}'\n" for a in narr_clips))
+            narr_concat = pdir / "_narr.wav"
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(alist),
+                "-c", "copy", str(narr_concat),
+            ], check=True)
+
+    # 3) build final audio mix
+    final = pdir / "final.mp4"
+    if narr_concat and music_track.exists():
+        # narration over background music: duck music -16dB, normalize to -14 LUFS
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", str(video_concat), "-i", str(narr_concat), "-i", str(music_track),
+            "-filter_complex",
+            "[2:a]volume=0.18[bgm];[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout];"
+            "[aout]loudnorm=I=-14:LRA=11:TP=-1.5[final]",
+            "-map", "0:v", "-map", "[final]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-shortest", str(final),
+        ], check=True)
+    elif narr_concat:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(video_concat), "-i", str(narr_concat),
+            "-c:v", "copy", "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", str(final),
+        ], check=True)
+    elif music_track.exists():
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(video_concat), "-i", str(music_track),
+            "-c:v", "copy", "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", str(final),
+        ], check=True)
+    else:
+        subprocess.run(["cp", str(video_concat), str(final)], check=True)
+
+    for f in [list_file, video_concat, pdir / "_alist.txt", narr_concat]:
+        if f and Path(f).exists():
+            Path(f).unlink()
+
+    print(f"[ok] {final}")
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+PY
+
+# ---- Justfile ----
+log "Justfile"
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/justfile" >/dev/null <<'JUST'
+# /opt/videogen Justfile — daily commands
+
+set shell := ["bash", "-cu"]
+
+py := "/opt/videogen/.venv/bin/python"
+stages := "/opt/videogen/pipeline/stages"
+
+default:
+    @just --list
+
+# scaffold a new project
+new slug:
+    mkdir -p /opt/videogen/projects/{{slug}}
+    @echo "ok -> /opt/videogen/projects/{{slug}}"
+
+# draft script with Qwen (Ollama)
+script slug topic seconds="90":
+    {{py}} {{stages}}/01_script.py {{slug}} "{{topic}}" {{seconds}}
+
+# break script into shotlist
+shots slug clip_secs="5":
+    {{py}} {{stages}}/02_storyboard.py {{slug}} {{clip_secs}}
+
+# render all clips (or a single shot id)
+render slug shot_id="":
+    {{py}} {{stages}}/03_render.py {{slug}} {{shot_id}}
+
+# RIFE-style interpolation (uses ffmpeg minterpolate)
+interpolate slug:
+    {{py}} {{stages}}/04_interpolate.py {{slug}}
+
+# upscale to 1080p
+upscale slug w="1920" h="1080":
+    {{py}} {{stages}}/05_upscale.py {{slug}} {{w}} {{h}}
+
+# narration via GPT-SoVITS (needs api_v2 running on :9880)
+voice slug ref_wav ref_text:
+    {{py}} {{stages}}/06_voice.py {{slug}} "{{ref_wav}}" "{{ref_text}}"
+
+# concat + mux + loudnorm
+mux slug:
+    {{py}} {{stages}}/07_mux.py {{slug}}
+
+# generate YouTube thumbnail (1920x1080) via Flux Krea
+thumbnail slug prompt model="flux":
+    {{py}} {{stages}}/08_thumbnail.py {{slug}} "{{prompt}}" {{model}}
+
+# generate one ref still per shot (use as I2V input for cleaner video)
+storyboard-imgs slug model="flux":
+    {{py}} {{stages}}/09_storyboard_imgs.py {{slug}} {{model}}
+
+# generate background beats via MusicGen (default) or ACE-Step (full-song style)
+music slug prompt seconds="60" model="musicgen":
+    {{py}} {{stages}}/10_music.py {{slug}} "{{prompt}}" {{seconds}} {{model}}
+
+# full pipeline (no voice)
+all slug:
+    just render {{slug}}
+    just interpolate {{slug}}
+    just upscale {{slug}}
+    just mux {{slug}}
+
+# full pipeline w/ image-first workflow (better video quality)
+all-img slug:
+    just storyboard-imgs {{slug}}
+    just render {{slug}}
+    just interpolate {{slug}}
+    just upscale {{slug}}
+    just mux {{slug}}
+
+# stop other GPU services for full VRAM
+stop:
+    /opt/videogen/scripts/stop_all.sh
+
+# restart other GPU services
+start:
+    /opt/videogen/scripts/start_all.sh
+
+# show GPU
+gpu:
+    rocm-smi || true
+
+# tail comfyui logs
+logs:
+    journalctl -u comfyui -f
+JUST
+
+# ---- helper scripts ----
+log "Helper scripts"
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/scripts/stop_all.sh" >/dev/null <<'BASH'
+#!/usr/bin/env bash
+# free GPU VRAM for big renders
+for s in ollama gpt-sovits whisper; do
+    if systemctl is-active --quiet "$s"; then
+        echo "stopping $s"
+        sudo systemctl stop "$s"
+    fi
+done
+sleep 2
+rocm-smi || true
+BASH
+sudo -u "${SERVICE_USER}" chmod +x "${INSTALL_DIR}/scripts/stop_all.sh"
+
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/scripts/start_all.sh" >/dev/null <<'BASH'
+#!/usr/bin/env bash
+for s in ollama whisper gpt-sovits; do
+    if systemctl list-unit-files | grep -q "^${s}\.service"; then
+        echo "starting $s"
+        sudo systemctl start "$s" || true
+    fi
+done
+BASH
+sudo -u "${SERVICE_USER}" chmod +x "${INSTALL_DIR}/scripts/start_all.sh"
+
+# allow videogen user to control these services without password
+log "Sudoers rule for service control"
+cat >/etc/sudoers.d/videogen-services <<EOF
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop ollama, /usr/bin/systemctl start ollama, /usr/bin/systemctl stop whisper, /usr/bin/systemctl start whisper, /usr/bin/systemctl stop gpt-sovits, /usr/bin/systemctl start gpt-sovits, /usr/bin/systemctl stop comfyui, /usr/bin/systemctl start comfyui
+EOF
+chmod 440 /etc/sudoers.d/videogen-services
+
+# ---- workflow placeholders ----
+log "Workflow placeholders (export real ones from ComfyUI UI)"
+for f in ltx23_t2v.json ltx23_i2v.json wan22_t2v.json wan22_i2v.json wan22_flf2v.json flux_krea_t2i.json sdxl_t2i.json music_ace_step.json music_musicgen.json; do
+    if [[ ! -f "${INSTALL_DIR}/workflows/${f}" ]]; then
+        sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/workflows/${f}" >/dev/null <<EOF
+{
+  "_README": "Replace this file with a real ComfyUI workflow JSON (Save (API Format)).",
+  "_REQUIRED_PLACEHOLDERS": [
+    "__PROMPT__", "__SEED__", "__FRAMES__",
+    "__WIDTH__", "__HEIGHT__", "__FPS__",
+    "__FIRST_FRAME__ (i2v/flf2v only)", "__LAST_FRAME__ (flf2v only)"
+  ]
+}
+EOF
+    fi
+done
+
+# ---- README in install dir ----
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/HOWTO.txt" >/dev/null <<'EOF'
+VIDEOGEN PIPELINE
+=================
+
+Run as: sudo -iu videogen
+Then:   cd /opt/videogen
+
+Daily commands:
+  just                          # list commands
+  just new myvid
+  just script myvid "topic"     # Qwen drafts via Ollama
+  just shots myvid              # split into shotlist
+  just render myvid             # ComfyUI batch render (FLF2V chain)
+  just render myvid 03          # regen one shot
+  just interpolate myvid
+  just upscale myvid
+  just voice myvid /path/ref.wav "ref transcript"
+  just mux myvid                # final.mp4
+  just stop                     # free VRAM
+  just start                    # restart services
+
+ONE-TIME SETUP (after install):
+  1. Open ComfyUI: http://SERVER:8188
+  2. Build a Wan 2.2 T2V workflow (load high+low noise GGUF, encoder, VAE, sampler)
+  3. Replace text fields with placeholders __PROMPT__, __SEED__ etc.
+  4. Top-right: Workflow -> Save (API Format) -> save to /opt/videogen/workflows/wan22_t2v.json
+  5. Repeat for wan22_i2v.json (FLF2V/I2V workflow with __FIRST_FRAME__)
+
+PROJECT STRUCTURE:
+  projects/<slug>/
+    script.md
+    shots.toml
+    01_clips/        T2V/I2V outputs
+    02_interpolated/ 16->32fps
+    03_upscaled/     -> 1080p
+    04_audio/        per-shot narration
+    final.mp4
+EOF
+
+# ---- profile entry for videogen user ----
+sudo -u "${SERVICE_USER}" tee -a "/var/lib/${SERVICE_USER}/.bashrc" >/dev/null <<'EOF'
+
+# videogen pipeline
+export PATH="/opt/videogen/.venv/bin:$PATH"
+cd /opt/videogen 2>/dev/null || true
+EOF
+
+cat <<EOF
+
+============================================================
+ Videogen pipeline installed at ${INSTALL_DIR}
+
+ Switch user:    sudo -iu ${SERVICE_USER}
+ List commands:  just
+ Read howto:     cat /opt/videogen/HOWTO.txt
+
+ Required next step:
+   Build real ComfyUI workflows in the UI, save (API Format) to:
+     /opt/videogen/workflows/wan22_t2v.json
+     /opt/videogen/workflows/wan22_i2v.json
+   Replace prompt/seed/frame fields with __PROMPT__, __SEED__, etc.
+============================================================
+EOF

@@ -98,7 +98,8 @@ chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 sudo -u "${SERVICE_USER}" bash <<EOF
 set -euo pipefail
 if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
-    git clone https://github.com/comfyanonymous/ComfyUI.git "${INSTALL_DIR}"
+    git clone https://github.com/comfyanonymous/ComfyUI.git "${INSTALL_DIR}" || \
+        git clone https://github.com/Comfy-Org/ComfyUI.git "${INSTALL_DIR}"
 else
     git -C "${INSTALL_DIR}" pull --ff-only
 fi
@@ -135,25 +136,28 @@ clone_or_pull() {
     fi
 }
 
-clone_or_pull https://github.com/ltdrdata/ComfyUI-Manager.git ComfyUI-Manager
+# Core ComfyUI ecosystem (verified repos)
+clone_or_pull https://github.com/Comfy-Org/ComfyUI-Manager.git ComfyUI-Manager
 clone_or_pull https://github.com/city96/ComfyUI-GGUF.git ComfyUI-GGUF
 clone_or_pull https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git ComfyUI-VideoHelperSuite
 clone_or_pull https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git ComfyUI-Frame-Interpolation
 clone_or_pull https://github.com/kijai/ComfyUI-WanVideoWrapper.git ComfyUI-WanVideoWrapper
 clone_or_pull https://github.com/cubiq/ComfyUI_essentials.git ComfyUI_essentials
 clone_or_pull https://github.com/rgthree/rgthree-comfy.git rgthree-comfy
-clone_or_pull https://github.com/ace-step/ComfyUI-ACE-Step.git ComfyUI-ACE-Step
-clone_or_pull https://github.com/a-r-r-o-w/ComfyUI-MusicGen.git ComfyUI-MusicGen || true
-# NAG node — boosts negative prompt at low CFG (turbo/distilled models)
 clone_or_pull https://github.com/ChenDarYen/ComfyUI-NAG.git ComfyUI-NAG || true
-# Hunyuan-Foley — add audio to existing Wan video clips
-clone_or_pull https://github.com/if-ai/ComfyUI-IF_HunyuanFoley.git ComfyUI-IF_HunyuanFoley || true
-# Civitai Helper — browse/download LoRAs from Civitai inside ComfyUI
-clone_or_pull https://github.com/butaixianran/Stable-Diffusion-Webui-Civitai-Helper.git Civitai-Helper || true
-clone_or_pull https://github.com/civitai/civitai-comfy-nodes.git civitai-comfy-nodes || true
-# IndexTTS-2: zero-shot voice cloning + emotion control + duration control
+
+# Music gen
+clone_or_pull https://github.com/billwuhao/ComfyUI_ACE-Step.git ComfyUI_ACE-Step || true
+clone_or_pull https://github.com/eigenpunk/ComfyUI-audio.git ComfyUI-audio || true
+
+# Audio post (Hunyuan-Foley)
+clone_or_pull https://github.com/aistudynow/Comfyui-HunyuanFoley.git Comfyui-HunyuanFoley || true
+
+# Civitai LoRA browser (verified — old butaixianran repo is SD-WebUI not ComfyUI)
+clone_or_pull https://github.com/MoonGoblinDev/Civicomfy.git Civicomfy || true
+
+# TTS
 clone_or_pull https://github.com/snicolast/ComfyUI-IndexTTS2.git ComfyUI-IndexTTS2 || true
-# TTS Audio Suite: multi-engine TTS umbrella (Chatterbox, F5-TTS, etc)
 clone_or_pull https://github.com/diodiogod/TTS-Audio-Suite.git TTS-Audio-Suite || true
 
 # install per-node deps
@@ -167,151 +171,186 @@ done
 EOF
 
 # ---- model downloads ----
-log "Downloading models (Wan 2.2 video, LTX-2 video, Flux Krea image, encoders, VAEs, upscalers)"
-log "Total disk: ~70GB. Network: high. This takes a while."
+log "Downloading models (Wan 2.2, LTX, Flux 2, Krea, Qwen-Image, SDXL, MusicGen, ACE-Step, Foley, IndexTTS-2)"
+log "Total disk: ~80-100GB. Network: high. This takes a while."
+log "If you have an HF_TOKEN env set, it will be used for any gated repos."
 MODELS_DIR="${INSTALL_DIR}/models"
-sudo -u "${SERVICE_USER}" bash <<EOF
+sudo -u "${SERVICE_USER}" --preserve-env=HF_TOKEN,HUGGING_FACE_HUB_TOKEN bash <<EOF
 set -euo pipefail
 cd "${INSTALL_DIR}"
 source .venv/bin/activate
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
-mkdir -p models/{diffusion_models,text_encoders,vae,clip_vision,upscale_models,unet,checkpoints,loras}
+mkdir -p models/{diffusion_models,text_encoders,vae,clip_vision,upscale_models,unet,checkpoints,loras,audio_models,TTS}
 
 python - <<'PY'
-import os, sys
-from huggingface_hub import hf_hub_download
+import os, sys, traceback
+from huggingface_hub import hf_hub_download, snapshot_download
 
 base = os.path.join(os.getcwd(), "models")
 wan_quant = "${WAN_QUANT}"
+hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+install_ltx = "${INSTALL_LTX}" == "1"
 
-def grab(repo, fname, subdir):
+ok_count = 0
+fail_count = 0
+fails = []
+
+def grab(repo, fname, subdir, gated=False):
+    global ok_count, fail_count
     target_dir = os.path.join(base, subdir)
     os.makedirs(target_dir, exist_ok=True)
+    target = os.path.join(target_dir, os.path.basename(fname))
+    if os.path.exists(target) and os.path.getsize(target) > 0:
+        print(f"[skip] already have {fname}")
+        ok_count += 1
+        return True
     print(f"[get] {repo}::{fname} -> {subdir}")
     try:
-        hf_hub_download(repo_id=repo, filename=fname, local_dir=target_dir, local_dir_use_symlinks=False)
-        print("   ok")
+        kwargs = dict(repo_id=repo, filename=fname, local_dir=target_dir,
+                      local_dir_use_symlinks=False)
+        if hf_token: kwargs["token"] = hf_token
+        hf_hub_download(**kwargs)
+        # Verify
+        candidate = os.path.join(target_dir, fname.split("/")[-1])
+        if os.path.exists(candidate) and os.path.getsize(candidate) > 1024:
+            print(f"   ok ({os.path.getsize(candidate)//(1024*1024)}MB)")
+            ok_count += 1
+            return True
+        else:
+            print(f"   FAIL: file missing or zero-size after download")
+            fails.append(f"{repo}::{fname}")
+            fail_count += 1
+            return False
     except Exception as e:
-        print(f"   FAIL: {e}")
+        msg = str(e)[:200]
+        if gated and ("401" in msg or "403" in msg or "gated" in msg.lower()):
+            print(f"   GATED: needs HF_TOKEN with license accepted. Skipping.")
+        else:
+            print(f"   FAIL: {msg}")
+        fails.append(f"{repo}::{fname}")
+        fail_count += 1
+        return False
 
-# ===== VIDEO: Wan 2.2 T2V-A14B GGUF (high + low noise experts) =====
-grab("city96/Wan2.2-T2V-A14B-HighNoise-gguf", f"Wan2.2-T2V-A14B-HighNoise-{wan_quant}.gguf", "diffusion_models")
-grab("city96/Wan2.2-T2V-A14B-LowNoise-gguf",  f"Wan2.2-T2V-A14B-LowNoise-{wan_quant}.gguf",  "diffusion_models")
+def grab_snapshot(repo, subdir, allow_patterns=None):
+    global ok_count, fail_count
+    target_dir = os.path.join(base, subdir)
+    os.makedirs(target_dir, exist_ok=True)
+    print(f"[snapshot] {repo} -> {subdir}")
+    try:
+        kwargs = dict(repo_id=repo, local_dir=target_dir,
+                      local_dir_use_symlinks=False, max_workers=4)
+        if allow_patterns: kwargs["allow_patterns"] = allow_patterns
+        if hf_token: kwargs["token"] = hf_token
+        snapshot_download(**kwargs)
+        print(f"   ok")
+        ok_count += 1
+    except Exception as e:
+        print(f"   FAIL: {str(e)[:200]}")
+        fails.append(f"snapshot:{repo}")
+        fail_count += 1
 
-# ===== VIDEO: Wan 2.2 I2V-A14B GGUF (for FLF2V stitching) =====
-grab("city96/Wan2.2-I2V-A14B-HighNoise-gguf", f"Wan2.2-I2V-A14B-HighNoise-{wan_quant}.gguf", "diffusion_models")
-grab("city96/Wan2.2-I2V-A14B-LowNoise-gguf",  f"Wan2.2-I2V-A14B-LowNoise-{wan_quant}.gguf",  "diffusion_models")
+# ===== VIDEO: Wan 2.2 GGUF (QuantStack, real repo, structure: HighNoise/ + LowNoise/) =====
+for noise in ["HighNoise", "LowNoise"]:
+    grab("QuantStack/Wan2.2-T2V-A14B-GGUF",
+         f"{noise}/Wan2.2-T2V-A14B-{noise}-{wan_quant}.gguf", "diffusion_models")
+    grab("QuantStack/Wan2.2-I2V-A14B-GGUF",
+         f"{noise}/Wan2.2-I2V-A14B-{noise}-{wan_quant}.gguf", "diffusion_models")
 
-# ===== VIDEO: Wan 2.2 5B Turbo Q8 GGUF (native 1440p! per Tensor Alchemist) =====
-# 4-step distilled. CFG=1, shift=5, SS solver, beta scheduler, NAG energy_scale=35.
-grab("city96/Wan2.2-T2V-5B-Turbo-gguf", "Wan2.2-T2V-5B-Turbo-Q8_0.gguf", "diffusion_models")
-# Lightning 4-step LoRA (often baked in; download separately as fallback)
-grab("Kijai/WanVideo_comfy", "Wan2_2-Lightning-LoRA-rank32.safetensors", "loras")
+# Wan 2.2 TI2V-5B (native 1440p, distilled in single model)
+grab("QuantStack/Wan2.2-TI2V-5B-GGUF",
+     f"Wan2.2-TI2V-5B-{wan_quant}.gguf", "diffusion_models")
 
-# ===== VIDEO: LTX 2.3 v1.1 22B GGUF (gated on INSTALL_LTX, needs 64GB+ system RAM) =====
-# v1.1 dropped late April 2026 (Tensor Alchemist breakdown):
-#   big jumps in spatial awareness, lighting/shadow control, style adherence.
-# Stick with GGUF on AMD (RDNA2 has no FP8 hardware, Sage Attention also unreliable).
-if "${INSTALL_LTX}" == "1":
-    for variant, fname in [
-        ("LTX-Video-2.3-v1.1-T2V-GGUF", "ltx-video-2.3-v1.1-t2v-Q5_K_S.gguf"),
-        ("LTX-Video-2.3-v1.1-I2V-GGUF", "ltx-video-2.3-v1.1-i2v-Q5_K_S.gguf"),
-        # fallbacks if v1.1 repo names not yet posted with this exact path
-        ("LTX-Video-2.3-T2V-GGUF",      "ltx-video-2.3-t2v-Q5_K_S.gguf"),
-        ("LTX-Video-2.3-I2V-GGUF",      "ltx-video-2.3-i2v-Q5_K_S.gguf"),
+# Wan 2.2 official ComfyUI repackage: encoder, VAE, lightning 4-step LoRAs
+WAN_REPACK = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+grab(WAN_REPACK, "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
+grab(WAN_REPACK, "split_files/vae/wan2.2_vae.safetensors",       "vae")
+grab(WAN_REPACK, "split_files/vae/wan_2.1_vae.safetensors",      "vae")  # fallback for older workflows
+grab(WAN_REPACK, "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors", "loras")
+grab(WAN_REPACK, "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",  "loras")
+grab(WAN_REPACK, "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",   "loras")
+grab(WAN_REPACK, "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",    "loras")
+
+# CLIP-Vision (for I2V conditioning) — from older Wan 2.1 repackage
+grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+     "split_files/clip_vision/clip_vision_h.safetensors", "clip_vision")
+
+# ===== VIDEO: LTX 2.3 (gated on INSTALL_LTX, needs 64GB+ RAM) =====
+if install_ltx:
+    print("[info] LTX 2.3 install gated on — fetching")
+    # Repos may shift; try multiple fallback names
+    for repo in [
+        "Lightricks/LTX-Video",
+        "Lightricks/LTXV",
     ]:
-        for repo in [f"unsloth/{variant}", f"QuantStack/{variant}", f"Kijai/{variant}"]:
-            try:
-                grab(repo, fname, "diffusion_models")
-                break
-            except Exception:
-                continue
-    for repo in ["Lightricks/LTX-Video-2.3-v1.1", "Lightricks/LTX-Video-2.3", "Lightricks/LTX-Video"]:
         try:
-            grab(repo, "ltxv-vae.safetensors", "vae")
+            grab_snapshot(repo, "diffusion_models/ltx",
+                          allow_patterns=["*.safetensors", "*.pth", "*.json", "*.yaml"])
             break
         except Exception:
             continue
 else:
-    print("[skip] LTX 2.3 v1.1 (set INSTALL_LTX=1 after 64GB+ system RAM upgrade)")
+    print("[skip] LTX 2.3 (set INSTALL_LTX=1 after 64GB+ RAM upgrade)")
 
-# ===== VIDEO LoRA: LTX 2.3 Lip-Sync LoRA (talking head w/ synced lips from voice) =====
-# First community AV LoRA for LTX 2.3. End your prompt with the speech transcript.
-if "${INSTALL_LTX}" == "1":
-    for repo in [
-        "Lightricks/LTXV-Lipsync-LoRA",
-        "Kijai/LTX-Video-LipSync-LoRA",
-    ]:
-        try:
-            grab(repo, "ltxv-lipsync-lora.safetensors", "loras")
-            break
-        except Exception:
-            continue
+# ===== AUDIO: Hunyuan-Foley (adds audio to Wan 2.2 video clips) =====
+for fname in ["hunyuanvideo_foley.pth",
+              "synchformer_state_dict.pth",
+              "vae_128d_48k.pth",
+              "config.yaml"]:
+    grab("tencent/HunyuanVideo-Foley", fname, "audio_models/HunyuanFoley")
 
-# ===== AUDIO: Hunyuan-Foley (adds audio to Wan 2.2 video clips post-gen) =====
-# Separate workflow to avoid OOM. ~2-3min/clip on 8GB. Strong on ambient sound.
-grab("Tencent/HunyuanVideo-Foley", "hunyuan_video_foley.safetensors", "audio_models")
+# ===== IMAGE: FLUX.2 Dev (Comfy-Org repackage has encoder + VAE; GGUF for diffusion) =====
+grab("city96/FLUX.2-dev-gguf",   "flux2-dev-Q5_K_M.gguf", "diffusion_models")
+grab("Comfy-Org/flux2-dev",      "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors", "text_encoders")
+grab("Comfy-Org/flux2-dev",      "split_files/vae/flux2-vae.safetensors", "vae")
+grab("Comfy-Org/flux2-dev",      "split_files/loras/Flux2TurboComfyv2.safetensors", "loras")
 
-# ===== Wan video encoders/VAEs =====
-grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
-grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/vae/wan_2.1_vae.safetensors", "vae")
-grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/clip_vision/clip_vision_h.safetensors", "clip_vision")
+# ===== IMAGE: Qwen-Image-2512 (lowercase filenames per actual repo) =====
+grab("unsloth/Qwen-Image-2512-GGUF",  "qwen-image-2512-Q4_K_M.gguf", "diffusion_models")
+grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "text_encoders")
+grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/vae/qwen_image_vae.safetensors", "vae")
 
-# ===== IMAGE: FLUX.2 Dev Q5_K_M GGUF (top-tier 2026 per benchmarks) =====
-# Different stack from Flux 1: Mistral 3 Small as text encoder, new VAE.
-grab("city96/FLUX.2-dev-gguf", "flux2-dev-Q5_K_M.gguf", "diffusion_models")
-grab("Comfy-Org/Mistral-Small-Flux2",   "mistral_3_small_flux2_bf16.safetensors", "text_encoders")
-grab("black-forest-labs/FLUX.2-dev",    "flux2-vae.safetensors", "vae")
-
-# ===== IMAGE: Qwen-Image-2512 Q4_K_M GGUF (top OSS per Dec 2025 benchmarks) =====
-# Alternative aesthetic to Flux family. Strong text rendering. Uses qwen text encoder.
-grab("unsloth/Qwen-Image-2512-GGUF",     "Qwen-Image-2512-Q4_K_M.gguf", "diffusion_models")
-grab("Comfy-Org/Qwen-Image_ComfyUI",     "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "text_encoders")
-grab("Comfy-Org/Qwen-Image_ComfyUI",     "split_files/vae/qwen_image_vae.safetensors", "vae")
-
-# ===== IMAGE: Flux.1 Krea Dev Q8 GGUF (skin specialist, anti-plastic) =====
-grab("QuantStack/FLUX.1-Krea-dev-GGUF", "flux1-krea-dev-Q8_0.gguf", "diffusion_models")
-
-# ===== IMAGE: Flux 1 text encoders + VAE (still needed for Krea) =====
-grab("city96/t5-v1_1-xxl-encoder-gguf", "t5-v1_1-xxl-encoder-Q8_0.gguf", "text_encoders")
+# ===== IMAGE: Flux.1 Krea Dev (skin specialist) =====
+grab("QuantStack/FLUX.1-Krea-dev-GGUF",   "flux1-krea-dev-Q8_0.gguf", "diffusion_models")
+grab("city96/t5-v1_1-xxl-encoder-gguf",   "t5-v1_1-xxl-encoder-Q8_0.gguf", "text_encoders")
 grab("comfyanonymous/flux_text_encoders", "clip_l.safetensors", "text_encoders")
-grab("black-forest-labs/FLUX.1-schnell", "ae.safetensors", "vae")
+# Public ae.safetensors mirror (avoids gated black-forest-labs/FLUX.1-schnell)
+grab("sirorable/flux-ae-vae", "ae.safetensors", "vae")
 
-# ===== IMAGE: SDXL base (fast iteration, storyboard refs, LoRA ecosystem) =====
+# ===== IMAGE: SDXL =====
 grab("stabilityai/stable-diffusion-xl-base-1.0", "sd_xl_base_1.0.safetensors", "checkpoints")
 grab("stabilityai/sdxl-vae", "sdxl_vae.safetensors", "vae")
 
-# ===== Upscaler =====
+# ===== Upscalers =====
 grab("ai-forever/Real-ESRGAN", "RealESRGAN_x2.pth", "upscale_models")
 grab("ai-forever/Real-ESRGAN", "RealESRGAN_x4.pth", "upscale_models")
 
-# ===== MUSIC: ACE-Step 1.5 (AMD-tuned, <4GB VRAM, royalty-free trained) =====
-os.makedirs(os.path.join(base, "audio_models"), exist_ok=True)
-grab("ACE-Step/ACE-Step-v1-3.5B", "ace_step_v1_3.5b.safetensors", "audio_models")
-grab("ACE-Step/ACE-Step-v1-3.5B", "config.json", "audio_models")
+# ===== MUSIC: ACE-Step 1.5 (multi-file structure — snapshot the whole repo) =====
+grab_snapshot("ACE-Step/ACE-Step-v1-3.5B", "audio_models/ACE-Step",
+              allow_patterns=["*.json", "*.safetensors"])
 
-# ===== MUSIC: MusicGen Stereo (instrumental beats, primary for background music) =====
-# Large = best quality for beats, ~7-8GB VRAM. Medium = lighter fallback ~3-4GB.
-grab("facebook/musicgen-stereo-large", "model.safetensors", "audio_models")
-grab("facebook/musicgen-stereo-medium", "model.safetensors", "audio_models")
+# ===== MUSIC: MusicGen Stereo =====
+grab("facebook/musicgen-stereo-large",  "model.safetensors", "audio_models/musicgen-stereo-large")
+grab("facebook/musicgen-stereo-medium", "model.safetensors", "audio_models/musicgen-stereo-medium")
 
-# ===== TTS: IndexTTS-2 (zero-shot voice cloning + emotion control + duration) =====
-# Complements GPT-SoVITS (which is fine-tune based). Use for varied narration tones.
-os.makedirs(os.path.join(base, "TTS", "IndexTTS-2"), exist_ok=True)
-for fname in [
-    "config.yaml",
-    "gpt.pth",
-    "s2mel.pth",
-    "wav2vec2bert_stats.pt",
-    "qwen0.6bemo4-merge/config.json",
-    "qwen0.6bemo4-merge/model.safetensors",
-    "qwen0.6bemo4-merge/tokenizer.json",
-]:
-    try:
-        grab("IndexTeam/IndexTTS-2", fname, "TTS/IndexTTS-2")
-    except Exception:
-        pass
+# ===== TTS: IndexTTS-2 (snapshot whole repo) =====
+grab_snapshot("IndexTeam/IndexTTS-2", "TTS/IndexTTS-2",
+              allow_patterns=["*.yaml", "*.pth", "*.pt", "*.model", "*.txt",
+                              "qwen0.6bemo4-merge/*"])
+
+# ===== Summary =====
+print()
+print("=" * 50)
+print(f"Downloads OK:    {ok_count}")
+print(f"Downloads FAIL:  {fail_count}")
+if fails:
+    print("Failed:")
+    for f in fails[:20]:
+        print(f"  - {f}")
+    print()
+    print("Failures usually mean: gated repo (set HF_TOKEN), file renamed,")
+    print("or transient network. Re-run install-comfyui.sh — successful files skip.")
+print("=" * 50)
 PY
 
 echo

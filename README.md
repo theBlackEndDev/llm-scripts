@@ -19,7 +19,16 @@ Full creative pipeline:
 ## Install order (fresh box)
 
 ```bash
-# 0. Preflight — verify ROCm version, disk, RAM, ports, network
+# 0a. Bootstrap (only on a fresh Ubuntu install — installs Vulkan, Ollama,
+#     llama.cpp, Tailscale, helper aliases). Run as your user (NOT sudo).
+./setup-machine-2-local-llms-server.sh
+
+# 0b. Full ROCm SDK (required for ComfyUI + GPT-SoVITS PyTorch wheels).
+#     Ollama's bundled mini-ROCm is NOT enough for diffusion models.
+sudo ./install-rocm.sh
+exec su - $USER   # re-login for groups + PATH
+
+# 0c. Preflight — verify ROCm version, disk, RAM, ports, network
 ./preflight.sh
 
 # 1. STT

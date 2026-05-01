@@ -21,15 +21,17 @@ err() { printf '\033[1;31m[!]\033[0m %s\n' "$*" >&2; exit 1; }
 # Auto-detect ROCm and pick matching PyTorch wheel index.
 detect_rocm_version() {
     local v=""
-    if command -v rocminfo >/dev/null 2>&1; then
-        v=$(rocminfo 2>/dev/null | awk '/^Runtime Version:|^ROCk module version|RuntimeVersion:/ {print $NF}' | head -1)
+    [[ -f /opt/rocm/.info/version ]] && v=$(< /opt/rocm/.info/version)
+    if [[ -z "$v" ]]; then
+        for d in /opt/rocm-*/; do
+            [[ -f "${d}.info/version" ]] && { v=$(< "${d}.info/version"); break; }
+        done
     fi
-    [[ -z "$v" && -f /opt/rocm/.info/version ]] && v=$(< /opt/rocm/.info/version)
-    [[ -z "$v" && -f /opt/rocm/.info/version-dev ]] && v=$(< /opt/rocm/.info/version-dev)
     if [[ -z "$v" ]] && command -v dpkg >/dev/null 2>&1; then
-        v=$(dpkg -l 2>/dev/null | awk '$2 ~ /^rocm-core$/ {print $3}' | head -1 | cut -d'-' -f1 | cut -d'~' -f1)
+        local pkg
+        pkg=$(dpkg -l 2>/dev/null | awk '$2 ~ /^hip-runtime-amd$/ {print $3}' | head -1)
+        [[ -n "$pkg" ]] && v=$(echo "$pkg" | grep -oE '^[0-9]+\.[0-9]+')
     fi
-    [[ -z "$v" ]] && v=$(ls -d /opt/rocm-*/ 2>/dev/null | head -1 | sed -E 's|.*/rocm-([0-9.]+)/?|\1|')
     echo "$v"
 }
 select_torch_index() {

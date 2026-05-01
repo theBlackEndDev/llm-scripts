@@ -29,21 +29,25 @@ hdr "ROCm"
 
 detect_rocm_version() {
     local v=""
-    if command -v rocminfo >/dev/null 2>&1; then
-        v=$(rocminfo 2>/dev/null | awk '/^Runtime Version:|^ROCk module version|RuntimeVersion:/ {print $NF}' | head -1)
-    fi
-    if [[ -z "$v" && -f /opt/rocm/.info/version ]]; then
-        v=$(< /opt/rocm/.info/version)
-    fi
-    if [[ -z "$v" && -f /opt/rocm/.info/version-dev ]]; then
-        v=$(< /opt/rocm/.info/version-dev)
-    fi
-    if [[ -z "$v" ]] && command -v dpkg >/dev/null 2>&1; then
-        v=$(dpkg -l 2>/dev/null | awk '$2 ~ /^rocm-core$/ {print $3}' | head -1 | cut -d'-' -f1 | cut -d'~' -f1)
-    fi
+    # /opt/rocm symlink to active install (most reliable)
+    [[ -f /opt/rocm/.info/version ]] && v=$(< /opt/rocm/.info/version)
+    # versioned install dirs
     if [[ -z "$v" ]]; then
-        v=$(ls -d /opt/rocm-*/ 2>/dev/null | head -1 | sed -E 's|.*/rocm-([0-9.]+)/?|\1|')
+        for d in /opt/rocm-*/; do
+            [[ -f "${d}.info/version" ]] && { v=$(< "${d}.info/version"); break; }
+        done
     fi
+    # dpkg packages (hip-runtime-amd encodes ROCm version: e.g. 6.4.43482.60400 -> 6.4)
+    if [[ -z "$v" ]] && command -v dpkg >/dev/null 2>&1; then
+        local pkg
+        pkg=$(dpkg -l 2>/dev/null | awk '$2 ~ /^hip-runtime-amd$/ {print $3}' | head -1)
+        [[ -n "$pkg" ]] && v=$(echo "$pkg" | grep -oE '^[0-9]+\.[0-9]+')
+        if [[ -z "$v" ]]; then
+            pkg=$(dpkg -l 2>/dev/null | awk '$2 ~ /^rocm-core$/ {print $3}' | head -1)
+            [[ -n "$pkg" ]] && v=$(echo "$pkg" | cut -d'-' -f1 | cut -d'~' -f1)
+        fi
+    fi
+    # NOTE: rocminfo "Runtime Version: X.Y" is HSA runtime, NOT ROCm SDK. Don't use it.
     echo "$v"
 }
 
@@ -72,14 +76,16 @@ else
     err "Missing /dev/kfd or /dev/dri/renderD*. AMDGPU kernel module loaded?"
 fi
 
-if command -v rocm-smi >/dev/null 2>&1; then
-    GPU_NAME=$(rocm-smi --showproductname 2>/dev/null | awk -F: '/Card series/ {print $2}' | head -1 | xargs)
-    [[ -n "$GPU_NAME" ]] && ok "GPU detected: $GPU_NAME" || warn "rocm-smi present but GPU name not parsed"
-    if rocm-smi --showproductname 2>/dev/null | grep -qi "6900\|6800\|6700\|6600"; then
-        info "RDNA2 detected → HSA_OVERRIDE_GFX_VERSION=10.3.0 will be set in service units"
+if command -v rocminfo >/dev/null 2>&1; then
+    GPU_NAME=$(rocminfo 2>/dev/null | awk '/Marketing Name:/ && !/CPU/ {sub(/^.*Marketing Name: */, ""); print; exit}')
+    [[ -n "$GPU_NAME" ]] && ok "GPU detected: $GPU_NAME" || warn "rocminfo present but GPU name not parsed"
+    GPU_GFX=$(rocminfo 2>/dev/null | awk '/Name:.*gfx/ {print $2; exit}')
+    [[ -n "$GPU_GFX" ]] && info "ISA: $GPU_GFX"
+    if [[ "$GPU_GFX" == gfx103* ]]; then
+        info "RDNA2 detected → HSA_OVERRIDE_GFX_VERSION=10.3.0 set in /etc/profile.d/rocm.sh"
     fi
 else
-    warn "rocm-smi missing. Install rocm-smi-lib or full ROCm dev tools."
+    warn "rocminfo missing. Install rocminfo or full ROCm dev tools."
 fi
 
 # ---------- Vulkan (whisper.cpp path) ----------

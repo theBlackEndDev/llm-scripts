@@ -104,25 +104,12 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
-# ---- bun ----
-export BUN_INSTALL="$HOME/.bun"
-[ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
-
 # ---- user bin (claude code launcher etc) ----
 export PATH="$HOME/bin:$PATH"
 
 # ---- local user-specific overrides (not tracked) ----
 [ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
 ZSHRC
-
-# ---- bun (optional install, idempotent) ----
-if [[ ! -x "${USER_HOME}/.bun/bin/bun" ]]; then
-    log "Installing bun"
-    curl -fsSL https://bun.sh/install | bash || warn "bun install failed (non-fatal)"
-else
-    log "bun present"
-fi
 
 # ---- nvm + Node 20 (skip if already installed by install-claude-code.sh) ----
 if [[ ! -d "${USER_HOME}/.nvm" ]]; then

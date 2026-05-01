@@ -197,6 +197,26 @@ EXPECTED_VRAM_GB=12
 EXPECTED_RAM_GB=18
 '
 
+write_profile "gemma4-26b" '
+PROFILE_DESC="Gemma 4 26B Q4_K_M (vision, 256K context). Needs 32GB+ RAM."
+START="ollama"
+STOP="comfyui gpt-sovits whisper"
+OLLAMA_MODEL="gemma4:26b"
+OLLAMA_KEEP="2h"
+EXPECTED_VRAM_GB=10
+EXPECTED_RAM_GB=24
+'
+
+write_profile "gemma4-light" '
+PROFILE_DESC="Gemma 4 e4b (small, fast, fits everywhere)"
+START="whisper ollama"
+STOP="comfyui gpt-sovits"
+OLLAMA_MODEL="gemma4:e4b"
+OLLAMA_KEEP="1h"
+EXPECTED_VRAM_GB=5
+EXPECTED_RAM_GB=8
+'
+
 write_profile "moe-fast" '
 PROFILE_DESC="Big-but-fast MoE (Qwen 3.6 35B A3B, 3B active)"
 START="ollama"

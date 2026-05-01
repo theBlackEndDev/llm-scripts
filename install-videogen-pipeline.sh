@@ -77,13 +77,17 @@ t2v        = "ltx23_t2v.json"
 i2v        = "ltx23_i2v.json"
 flf2v      = "wan22_flf2v.json"
 # image
-flux_t2i   = "flux_krea_t2i.json"
-sdxl_t2i   = "sdxl_t2i.json"
+flux_t2i        = "flux2_t2i.json"            # primary: FLUX.2 Dev (top tier 2026)
+flux_krea_t2i   = "flux_krea_t2i.json"        # alt: Krea (skin specialist)
+qwen_image_t2i  = "qwen_image_t2i.json"       # alt: Qwen-Image-2512 (different aesthetic)
+sdxl_t2i        = "sdxl_t2i.json"             # alt: SDXL (fast iter, LoRA library)
 # music
 music_ace      = "music_ace_step.json"
 music_musicgen = "music_musicgen.json"
 # audio post (add SFX/ambient to existing video)
 foley          = "hunyuan_foley.json"
+# TTS
+indextts2      = "indextts2.json"             # zero-shot voice + emotion control
 
 [render.video_engine]
 # "ltx" (fast, audio) or "wan" (better motion). Pipeline picks workflow accordingly.
@@ -925,6 +929,67 @@ if __name__ == "__main__":
     main(sys.argv[1], prompt, clip_id)
 PY
 
+sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/13_voice_zeroshot.py" >/dev/null <<'PY'
+"""IndexTTS-2 zero-shot voice cloning + emotion + duration control.
+Use for varied narration tones without training (vs GPT-SoVITS = fine-tuned).
+
+Emotions (8-vector): happy, sad, angry, fear, disgust, surprise, neutral, calm
+Each 0.0-1.0. Pass as comma-separated floats, e.g. "0.0,0.0,0.0,0.0,0.0,0.0,0.7,0.3"
+"""
+import sys, json, random, shutil, tomli
+from pathlib import Path
+sys.path.insert(0, "/opt/videogen/pipeline")
+from lib import config
+from lib.comfy_client import ComfyClient
+
+EMO_LABELS = ["happy","sad","angry","fear","disgust","surprise","neutral","calm"]
+DEFAULT_EMO = "0,0,0,0,0,0,0.7,0.3"  # mostly neutral with calm
+
+def main(slug: str, ref_wav: str, ref_text: str = "", emotion: str = DEFAULT_EMO,
+         duration_seconds: float = 0.0):
+    cfg = config.load()
+    pdir = config.project_dir(slug)
+    shots = tomli.loads((pdir / "shots.toml").read_text())["shots"]
+    out_dir = pdir / "04_audio"
+    out_dir.mkdir(exist_ok=True)
+    wf_path = Path(cfg["paths"]["workflows"]) / cfg["workflows"]["indextts2"]
+    if not wf_path.exists():
+        print(f"[err] workflow missing: {wf_path}")
+        return
+    raw_template = wf_path.read_text()
+    client = ComfyClient(cfg["hosts"]["comfyui"])
+    for s in shots:
+        text = s.get("narration", "").strip()
+        if not text:
+            continue
+        target = out_dir / f"shot_{s['id']}.wav"
+        seed = random.randint(1, 2**31 - 1)
+        raw = (raw_template
+               .replace("__REF_WAV__", ref_wav)
+               .replace("__REF_TEXT__", ref_text)
+               .replace("__TEXT__", text)
+               .replace("__EMOTION__", emotion)
+               .replace("__DURATION__", str(duration_seconds))
+               .replace("__SEED__", str(seed)))
+        print(f"[indextts2] shot {s['id']}: {text[:50]}...")
+        pid = client.queue(json.loads(raw))
+        history = client.wait(pid, timeout=300)
+        outs = client.collect_outputs(history, str(out_dir))
+        audio = [o for o in outs if o.endswith((".wav", ".mp3", ".flac"))]
+        if audio:
+            shutil.move(audio[-1], target)
+            print(f"   -> {target}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("usage: 13_voice_zeroshot.py <slug> <ref_wav> [ref_text] [emotion=8_floats] [duration]")
+        sys.exit(1)
+    ref_text = sys.argv[3] if len(sys.argv) > 3 else ""
+    emo      = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_EMO
+    dur      = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
+    main(sys.argv[1], sys.argv[2], ref_text, emo, dur)
+PY
+
 sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/pipeline/stages/12_lipsync.py" >/dev/null <<'PY'
 """LTX 2.3 Lip-Sync: talking head video with synchronized lips from voice.
 Requires: LTX 2.3 + LTX Lip-Sync LoRA installed (INSTALL_LTX=1).
@@ -1171,6 +1236,11 @@ foley slug prompt="ambient natural sound" shot_id="":
 lipsync slug ref_image audio transcript seconds="10":
     {{py}} {{stages}}/12_lipsync.py {{slug}} {{ref_image}} {{audio}} "{{transcript}}" {{seconds}}
 
+# zero-shot narration via IndexTTS-2 (no training; emotion + duration control)
+# emotion: 8 floats CSV (happy,sad,angry,fear,disgust,surprise,neutral,calm)
+voice-zeroshot slug ref_wav ref_text="" emotion="0,0,0,0,0,0,0.7,0.3" duration="0":
+    {{py}} {{stages}}/13_voice_zeroshot.py {{slug}} {{ref_wav}} "{{ref_text}}" "{{emotion}}" {{duration}}
+
 # --- LoRA management (Civitai) ---
 
 # show all category presets
@@ -1264,8 +1334,8 @@ log "Workflow placeholders (export real ones from ComfyUI UI)"
 for f in \
     ltx23_t2v.json ltx23_i2v.json ltx23_lipsync.json \
     wan22_t2v.json wan22_i2v.json wan22_flf2v.json wan22_5b_turbo.json \
-    flux_krea_t2i.json sdxl_t2i.json \
-    music_ace_step.json music_musicgen.json hunyuan_foley.json; do
+    flux2_t2i.json flux_krea_t2i.json qwen_image_t2i.json sdxl_t2i.json \
+    music_ace_step.json music_musicgen.json hunyuan_foley.json indextts2.json; do
     if [[ ! -f "${INSTALL_DIR}/workflows/${f}" ]]; then
         sudo -u "${SERVICE_USER}" tee "${INSTALL_DIR}/workflows/${f}" >/dev/null <<EOF
 {

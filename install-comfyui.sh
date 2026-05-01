@@ -148,6 +148,10 @@ clone_or_pull https://github.com/if-ai/ComfyUI-IF_HunyuanFoley.git ComfyUI-IF_Hu
 # Civitai Helper — browse/download LoRAs from Civitai inside ComfyUI
 clone_or_pull https://github.com/butaixianran/Stable-Diffusion-Webui-Civitai-Helper.git Civitai-Helper || true
 clone_or_pull https://github.com/civitai/civitai-comfy-nodes.git civitai-comfy-nodes || true
+# IndexTTS-2: zero-shot voice cloning + emotion control + duration control
+clone_or_pull https://github.com/snicolast/ComfyUI-IndexTTS2.git ComfyUI-IndexTTS2 || true
+# TTS Audio Suite: multi-engine TTS umbrella (Chatterbox, F5-TTS, etc)
+clone_or_pull https://github.com/diodiogod/TTS-Audio-Suite.git TTS-Audio-Suite || true
 
 # install per-node deps
 source "${INSTALL_DIR}/.venv/bin/activate"
@@ -251,10 +255,22 @@ grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/text_encoders/umt5_xxl
 grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/vae/wan_2.1_vae.safetensors", "vae")
 grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/clip_vision/clip_vision_h.safetensors", "clip_vision")
 
-# ===== IMAGE: Flux.1 Krea Dev GGUF Q8 (best photoreal, fixes "plastic skin") =====
+# ===== IMAGE: FLUX.2 Dev Q5_K_M GGUF (top-tier 2026 per benchmarks) =====
+# Different stack from Flux 1: Mistral 3 Small as text encoder, new VAE.
+grab("city96/FLUX.2-dev-gguf", "flux2-dev-Q5_K_M.gguf", "diffusion_models")
+grab("Comfy-Org/Mistral-Small-Flux2",   "mistral_3_small_flux2_bf16.safetensors", "text_encoders")
+grab("black-forest-labs/FLUX.2-dev",    "flux2-vae.safetensors", "vae")
+
+# ===== IMAGE: Qwen-Image-2512 Q4_K_M GGUF (top OSS per Dec 2025 benchmarks) =====
+# Alternative aesthetic to Flux family. Strong text rendering. Uses qwen text encoder.
+grab("unsloth/Qwen-Image-2512-GGUF",     "Qwen-Image-2512-Q4_K_M.gguf", "diffusion_models")
+grab("Comfy-Org/Qwen-Image_ComfyUI",     "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "text_encoders")
+grab("Comfy-Org/Qwen-Image_ComfyUI",     "split_files/vae/qwen_image_vae.safetensors", "vae")
+
+# ===== IMAGE: Flux.1 Krea Dev Q8 GGUF (skin specialist, anti-plastic) =====
 grab("QuantStack/FLUX.1-Krea-dev-GGUF", "flux1-krea-dev-Q8_0.gguf", "diffusion_models")
 
-# ===== IMAGE: Flux text encoders + VAE =====
+# ===== IMAGE: Flux 1 text encoders + VAE (still needed for Krea) =====
 grab("city96/t5-v1_1-xxl-encoder-gguf", "t5-v1_1-xxl-encoder-Q8_0.gguf", "text_encoders")
 grab("comfyanonymous/flux_text_encoders", "clip_l.safetensors", "text_encoders")
 grab("black-forest-labs/FLUX.1-schnell", "ae.safetensors", "vae")
@@ -276,6 +292,23 @@ grab("ACE-Step/ACE-Step-v1-3.5B", "config.json", "audio_models")
 # Large = best quality for beats, ~7-8GB VRAM. Medium = lighter fallback ~3-4GB.
 grab("facebook/musicgen-stereo-large", "model.safetensors", "audio_models")
 grab("facebook/musicgen-stereo-medium", "model.safetensors", "audio_models")
+
+# ===== TTS: IndexTTS-2 (zero-shot voice cloning + emotion control + duration) =====
+# Complements GPT-SoVITS (which is fine-tune based). Use for varied narration tones.
+os.makedirs(os.path.join(base, "TTS", "IndexTTS-2"), exist_ok=True)
+for fname in [
+    "config.yaml",
+    "gpt.pth",
+    "s2mel.pth",
+    "wav2vec2bert_stats.pt",
+    "qwen0.6bemo4-merge/config.json",
+    "qwen0.6bemo4-merge/model.safetensors",
+    "qwen0.6bemo4-merge/tokenizer.json",
+]:
+    try:
+        grab("IndexTeam/IndexTTS-2", fname, "TTS/IndexTTS-2")
+    except Exception:
+        pass
 PY
 
 echo
@@ -353,12 +386,18 @@ cat <<EOF
           LTX 2.3 v1.1 22B Q5_K_S (only if INSTALL_LTX=1; needs 64GB+ RAM)
           + LTX Lip-Sync LoRA (talking heads, only if INSTALL_LTX=1)
           + Wan Lightning 4-step LoRA
+   IMAGE: FLUX.2 Dev Q5_K_M GGUF (top-tier 2026)
+          Qwen-Image-2512 Q4_K_M GGUF (alt aesthetic, top OSS Dec 2025)
+          Flux.1 Krea Dev Q8 GGUF (skin specialist)
+          SDXL base + sdxl_vae (fast iter, LoRA library)
    IMAGE: Flux.1 Krea Dev Q8 GGUF (photoreal, fixes plastic skin)
           SDXL base (fast iteration, huge LoRA library)
    MUSIC: MusicGen Stereo Large (primary for beats, ~7-8GB VRAM)
           MusicGen Stereo Medium (lighter fallback, ~3-4GB VRAM)
           ACE-Step 1.5 3.5B (alt, full-song style, royalty-free)
    AUDIO: Hunyuan-Foley (add ambient/SFX to existing Wan clips post-gen)
+   TTS:   IndexTTS-2 (zero-shot, emotion + duration control)
+          [GPT-SoVITS v4 lives in /opt/GPT-SoVITS/, separate install]
    ENC:   umt5-xxl-fp8 (Wan), t5-v1_1-xxl-Q8 (Flux/LTX), clip_l, clip_vision_h
    VAE:   wan_2.1_vae, ltxv-vae, ae (Flux), sdxl_vae
    UPS:   Real-ESRGAN x2/x4

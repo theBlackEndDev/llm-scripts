@@ -188,8 +188,16 @@ just foley mythvid "rain on pavement, distant traffic"   # adds ambient
 Strong on ambient/SFX. Use specific audio descriptions, not just "audio".
 
 **Image:**
-- **Flux.1 Krea Dev Q5/Q8 GGUF** — photoreal, fixes "plastic skin"
+- **FLUX.2 Dev Q5_K_M GGUF** — primary, top-tier 2026 (Mistral 3 Small encoder + flux2-vae)
+- **Qwen-Image-2512 Q4_K_M GGUF** — alt aesthetic, top OSS Dec 2025, strong text rendering
+- **Flux.1 Krea Dev Q8 GGUF** — skin specialist, anti-plastic
 - **SDXL** — fast iteration, huge LoRA library
+
+**TTS:**
+- **GPT-SoVITS v4** — fine-tuned channel voice (your trained voice)
+- **IndexTTS-2** — zero-shot voice clone + emotion (8-vector) + duration control
+- Use `just voice` (SoVITS, fine-tuned) for channel voice
+- Use `just voice-zeroshot` (IndexTTS-2) for varied tones / quick character voices
 
 **Music (background beats):**
 - **MusicGen Stereo Large** — primary for beats/instrumental beds (~7-8GB VRAM). Designed for instrumental, supports loops/extension, melody conditioning.

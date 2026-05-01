@@ -59,6 +59,13 @@ sudo apt install -y \
   mesa-vulkan-drivers \
   vulkan-tools \
   libvulkan-dev \
+  vulkan-validationlayers-dev \
+  glslang-tools \
+  glslang-dev \
+  libglslang-dev \
+  spirv-tools \
+  spirv-headers \
+  libshaderc-dev \
   clinfo \
   htop \
   tmux \

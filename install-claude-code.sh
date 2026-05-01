@@ -58,9 +58,28 @@ chmod +x "${USER_HOME}/bin/clc"
 # remove old cc launcher if present (collides with /usr/bin/cc compiler)
 [[ -f "${USER_HOME}/bin/cc" ]] && rm -f "${USER_HOME}/bin/cc"
 
-# ensure ~/bin on PATH
-if ! grep -q 'HOME/bin' "${USER_HOME}/.bashrc" 2>/dev/null; then
-    echo 'export PATH="$HOME/bin:$PATH"' >> "${USER_HOME}/.bashrc"
+# ensure ~/bin on PATH (write to whichever rc files exist; zsh users don't read .bashrc)
+ensure_path_line() {
+    local rc="$1"
+    [[ -f "$rc" ]] || return 0
+    grep -q 'HOME/bin' "$rc" 2>/dev/null && return 0
+    echo 'export PATH="$HOME/bin:$PATH"' >> "$rc"
+}
+# touch .bashrc so it always exists for bash users
+[[ -f "${USER_HOME}/.bashrc" ]] || touch "${USER_HOME}/.bashrc"
+ensure_path_line "${USER_HOME}/.bashrc"
+# zsh: add to .zshrc if zsh is installed or .zshrc already present
+if command -v zsh >/dev/null 2>&1 || [[ -f "${USER_HOME}/.zshrc" ]]; then
+    [[ -f "${USER_HOME}/.zshrc" ]] || touch "${USER_HOME}/.zshrc"
+    ensure_path_line "${USER_HOME}/.zshrc"
+fi
+# also make nvm available for zsh sessions
+if [[ -f "${USER_HOME}/.zshrc" ]] && ! grep -q 'NVM_DIR' "${USER_HOME}/.zshrc"; then
+    cat >>"${USER_HOME}/.zshrc" <<'ZSH'
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+ZSH
 fi
 
 # ---- server-aware CLAUDE.md ----
@@ -359,7 +378,7 @@ cat <<EOF
    ~/.claude/CLAUDE.md
 
  To use it:
-   1. Open a new shell (or 'source ~/.bashrc') so PATH picks up nvm + ~/bin
+   1. Open a new shell (or 'source ~/.zshrc' / 'source ~/.bashrc') so PATH picks up nvm + ~/bin
    2. cd /opt/videogen   (or anywhere)
    3. clc                # opens claude in tmux
    4. Ask: "Render me a 90-second video about X"

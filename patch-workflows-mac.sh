@@ -33,6 +33,7 @@ WAN_14B_I2V_LO   = "LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf"
 FLUX2_GGUF       = "flux2-dev-Q5_K_M.gguf"
 FLUX_KREA_GGUF   = "flux1-krea-dev-Q8_0.gguf"
 QWEN_IMG_GGUF    = "qwen-image-2512-Q4_K_M.gguf"
+UMT5_GGUF        = "umt5-xxl-encoder-Q4_K_M.gguf"
 
 # ---- VRAM-safe defaults for 16GB RDNA2 (no Flash Attention) ----
 WAN_5B_W, WAN_5B_H, WAN_5B_LEN     = 832, 480, 33
@@ -107,6 +108,38 @@ def patch_latent_dims(nodes, w, h, length):
             if length and "length" in n["inputs"]:
                 n["inputs"]["length"] = length
 
+def patch_clip_loader_to_gguf(nodes):
+    """Swap CLIPLoader pointing to umt5_xxl_* -> CLIPLoaderGGUF + GGUF filename.
+    Keeps non-Wan CLIPLoader nodes (e.g. clip_l for Flux) untouched."""
+    for n in nodes:
+        t = n.get("type") or n.get("class_type")
+        if t != "CLIPLoader":
+            continue
+        # Detect by filename or type widget
+        wv = n.get("widgets_values") or []
+        inputs = n.get("inputs") or {}
+        cur = ""
+        if isinstance(wv, list) and wv:
+            cur = str(wv[0]) if isinstance(wv[0], str) else ""
+        if not cur and isinstance(inputs, dict):
+            cur = str(inputs.get("clip_name", ""))
+        if "umt5" not in cur.lower():
+            continue
+        if "type" in n: n["type"] = "CLIPLoaderGGUF"
+        if "class_type" in n: n["class_type"] = "CLIPLoaderGGUF"
+        n.setdefault("properties", {})["Node name for S&R"] = "CLIPLoaderGGUF"
+        # Rebuild widget values: GGUF loader takes [clip_name, type] (no device widget)
+        if isinstance(wv, list):
+            type_widget = "wan"
+            for w in wv:
+                if isinstance(w, str) and w in ("wan","sd","sdxl","sd3","flux"):
+                    type_widget = w; break
+            n["widgets_values"] = [UMT5_GGUF, type_widget]
+        if isinstance(inputs, dict):
+            inputs["clip_name"] = UMT5_GGUF
+            inputs.setdefault("type", "wan")
+            inputs.pop("device", None)
+
 def patch_vae_decode_tiled(nodes, is_video: bool):
     """Swap VAEDecode -> VAEDecodeTiled with tile params.
     For video: tile_size=128, overlap=32, temporal_size=32, temporal_overlap=4
@@ -180,6 +213,7 @@ def patch_workflow(src: Path, dst: Path):
         patch_latent_dims(nodes, IMG_W, IMG_H, None)
 
     patch_vae_decode_tiled(nodes, is_video)
+    patch_clip_loader_to_gguf(nodes)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w") as f:

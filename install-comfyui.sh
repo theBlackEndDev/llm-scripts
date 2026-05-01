@@ -261,9 +261,12 @@ for noise in ["HighNoise", "LowNoise"]:
 grab("QuantStack/Wan2.2-TI2V-5B-GGUF",
      f"Wan2.2-TI2V-5B-{wan_quant}.gguf", "diffusion_models")
 
-# Wan 2.2 official ComfyUI repackage: encoder, VAE, lightning 4-step LoRAs
+# Wan 2.2 official ComfyUI repackage: VAE, lightning 4-step LoRAs
 WAN_REPACK = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
-grab(WAN_REPACK, "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
+# Text encoder: GGUF Q4_K_M (~3GB) instead of fp8 safetensors (~6GB).
+# 16GB-RAM systems can't load the fp8 + a Wan model + Comfy process at once
+# (peak >15GB → swap thrash). GGUF version + CLIPLoaderGGUF node fits comfortably.
+grab("city96/umt5-xxl-encoder-gguf", "umt5-xxl-encoder-Q4_K_M.gguf", "text_encoders")
 grab(WAN_REPACK, "split_files/vae/wan2.2_vae.safetensors",       "vae")
 grab(WAN_REPACK, "split_files/vae/wan_2.1_vae.safetensors",      "vae")  # fallback for older workflows
 grab(WAN_REPACK, "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors", "loras")

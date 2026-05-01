@@ -107,6 +107,31 @@ def patch_latent_dims(nodes, w, h, length):
             if length and "length" in n["inputs"]:
                 n["inputs"]["length"] = length
 
+def patch_vae_decode_tiled(nodes, is_video: bool):
+    """Swap VAEDecode -> VAEDecodeTiled with tile params.
+    For video: tile_size=128, overlap=32, temporal_size=32, temporal_overlap=4
+    For images: tile_size=512, overlap=64
+    """
+    for n in nodes:
+        t = n.get("type") or n.get("class_type")
+        if t != "VAEDecode":
+            continue
+        if "type" in n: n["type"] = "VAEDecodeTiled"
+        if "class_type" in n: n["class_type"] = "VAEDecodeTiled"
+        n.setdefault("properties", {})["Node name for S&R"] = "VAEDecodeTiled"
+        if is_video:
+            n["widgets_values"] = [128, 32, 32, 4]   # tile, overlap, temporal_size, temporal_overlap
+            if isinstance(n.get("inputs"), dict):
+                n["inputs"]["tile_size"] = 128
+                n["inputs"]["overlap"] = 32
+                n["inputs"]["temporal_size"] = 32
+                n["inputs"]["temporal_overlap"] = 4
+        else:
+            n["widgets_values"] = [512, 64]
+            if isinstance(n.get("inputs"), dict):
+                n["inputs"]["tile_size"] = 512
+                n["inputs"]["overlap"] = 64
+
 def patch_workflow(src: Path, dst: Path):
     with open(src) as f:
         try:
@@ -130,10 +155,13 @@ def patch_workflow(src: Path, dst: Path):
     ggu = fname_for(name)
     dual = is_dual_expert(name)
 
+    is_video = ("wan" in name.lower() or "video" in name.lower() or
+                "i2v" in name.lower() or "t2v" in name.lower() or
+                "ltx" in name.lower())
+
     if dual:
         unet_nodes = [n for n in nodes
                       if (n.get("type") or n.get("class_type")) == "UNETLoader"]
-        # Heuristic: first UNETLoader = HighNoise, second = LowNoise
         if dual == "t2v":
             files = [WAN_14B_T2V_HI, WAN_14B_T2V_LO]
         else:
@@ -149,8 +177,9 @@ def patch_workflow(src: Path, dst: Path):
         else:
             patch_latent_dims(nodes, IMG_W, IMG_H, None)
     else:
-        # SDXL or generic: just lower latent if huge
         patch_latent_dims(nodes, IMG_W, IMG_H, None)
+
+    patch_vae_decode_tiled(nodes, is_video)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w") as f:

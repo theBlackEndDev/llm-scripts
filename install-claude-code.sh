@@ -42,9 +42,9 @@ log "Installing Claude Code globally via npm"
 npm install -g @anthropic-ai/claude-code
 
 # ---- tmux helper ----
-log "tmux launcher: ~/bin/cc"
+log "tmux launcher: ~/bin/clc"
 mkdir -p "${USER_HOME}/bin"
-cat >"${USER_HOME}/bin/cc" <<'BASH'
+cat >"${USER_HOME}/bin/clc" <<'BASH'
 #!/usr/bin/env bash
 # Reattach to or start a persistent Claude Code tmux session.
 SESSION="${1:-claude}"
@@ -53,7 +53,10 @@ if tmux has-session -t "${SESSION}" 2>/dev/null; then
 fi
 exec tmux new-session -s "${SESSION}" "claude"
 BASH
-chmod +x "${USER_HOME}/bin/cc"
+chmod +x "${USER_HOME}/bin/clc"
+
+# remove old cc launcher if present (collides with /usr/bin/cc compiler)
+[[ -f "${USER_HOME}/bin/cc" ]] && rm -f "${USER_HOME}/bin/cc"
 
 # ensure ~/bin on PATH
 if ! grep -q 'HOME/bin' "${USER_HOME}/.bashrc" 2>/dev/null; then
@@ -348,9 +351,9 @@ cat <<EOF
    claude
 
  Persistent tmux session (recommended):
-   cc          # alias installed at ~/bin/cc
+   clc         # launcher at ~/bin/clc (renamed from cc to avoid shadowing /usr/bin/cc)
    # detach: Ctrl-b d
-   # reattach: cc
+   # reattach: clc
 
  Server context written to:
    ~/.claude/CLAUDE.md
@@ -358,7 +361,7 @@ cat <<EOF
  To use it:
    1. Open a new shell (or 'source ~/.bashrc') so PATH picks up nvm + ~/bin
    2. cd /opt/videogen   (or anywhere)
-   3. cc                 # opens claude in tmux
+   3. clc                # opens claude in tmux
    4. Ask: "Render me a 90-second video about X"
 ============================================================
 EOF

@@ -132,21 +132,38 @@ fi
 
 # ---------- Network ----------
 hdr "Network"
-# Note: download.pytorch.org root returns 403 (CloudFront bucket policy);
-# test an actual wheel index path instead.
-declare -A NET_TESTS=(
-    ["https://huggingface.co"]="HF model registry"
-    ["https://github.com"]="git repos"
-    ["https://download.pytorch.org/whl/rocm6.4/torch_stable.html"]="PyTorch ROCm wheels"
-)
-for url in "${!NET_TESTS[@]}"; do
+# Simple HEAD checks — HF and GitHub
+for spec in \
+    "https://huggingface.co|HF model registry" \
+    "https://github.com|git repos"; do
+    url="${spec%|*}"
+    name="${spec#*|}"
     code=$(curl -fsS --max-time 8 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
-    if [[ "$code" == "200" || "$code" == "302" ]]; then
-        ok "${NET_TESTS[$url]} reachable ($code)"
+    if [[ "$code" =~ ^(200|301|302)$ ]]; then
+        ok "$name reachable ($code)"
     else
-        err "${NET_TESTS[$url]} unreachable (HTTP $code)"
+        err "$name unreachable (HTTP $code)"
     fi
 done
+
+# PyTorch wheels: CloudFront 403's on bucket browsing but actual wheel index works.
+# Use pip dry-run as authoritative check.
+if command -v python3 >/dev/null 2>&1; then
+    rocm_mm="${ROCM_MM:-6.4}"
+    if python3 -m pip install --dry-run --quiet --no-deps torch \
+            --index-url "https://download.pytorch.org/whl/rocm${rocm_mm}" >/dev/null 2>&1; then
+        ok "PyTorch ROCm $rocm_mm wheel index resolves (pip dry-run)"
+    else
+        # try without dry-run (older pip), just check index page
+        if curl -fsS --max-time 8 "https://download.pytorch.org/whl/rocm${rocm_mm}/torch/" >/dev/null 2>&1; then
+            ok "PyTorch ROCm $rocm_mm wheel index reachable"
+        else
+            warn "PyTorch ROCm $rocm_mm wheel test failed. Pip install may still work; rerun with -v if torch install fails."
+        fi
+    fi
+else
+    warn "python3 missing — cannot dry-run pytorch wheel test"
+fi
 
 # ---------- Ports ----------
 hdr "Port conflicts"

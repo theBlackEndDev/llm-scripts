@@ -19,6 +19,9 @@ Full creative pipeline:
 ## Install order (fresh box)
 
 ```bash
+# 0. Preflight — verify ROCm version, disk, RAM, ports, network
+./preflight.sh
+
 # 1. STT
 sudo ./install-whisper-vulkan.sh
 

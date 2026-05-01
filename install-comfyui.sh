@@ -9,7 +9,54 @@ readonly INSTALL_DIR="/opt/comfyui"
 readonly SERVICE_USER="comfy"
 readonly PORT=8188
 readonly LAN_CIDR="192.168.0.0/16"
-readonly TORCH_INDEX="https://download.pytorch.org/whl/rocm6.2"
+
+# Auto-detect ROCm and pick matching PyTorch wheel index.
+# Override with TORCH_INDEX_OVERRIDE env var if needed.
+detect_rocm_version() {
+    local v=""
+    if command -v rocminfo >/dev/null 2>&1; then
+        v=$(rocminfo 2>/dev/null | awk '/^Runtime Version:|^ROCk module version|RuntimeVersion:/ {print $NF}' | head -1)
+    fi
+    [[ -z "$v" && -f /opt/rocm/.info/version ]] && v=$(< /opt/rocm/.info/version)
+    [[ -z "$v" && -f /opt/rocm/.info/version-dev ]] && v=$(< /opt/rocm/.info/version-dev)
+    if [[ -z "$v" ]] && command -v dpkg >/dev/null 2>&1; then
+        v=$(dpkg -l 2>/dev/null | awk '$2 ~ /^rocm-core$/ {print $3}' | head -1 | cut -d'-' -f1 | cut -d'~' -f1)
+    fi
+    [[ -z "$v" ]] && v=$(ls -d /opt/rocm-*/ 2>/dev/null | head -1 | sed -E 's|.*/rocm-([0-9.]+)/?|\1|')
+    echo "$v"
+}
+
+select_torch_index() {
+    local rocm_ver="$1"
+    local mm
+    mm=$(echo "$rocm_ver" | cut -d. -f1-2)
+    case "$mm" in
+        6.2|6.3|6.4|7.0|7.1|7.2)
+            echo "https://download.pytorch.org/whl/rocm${mm}" ;;
+        7.3|7.4|7.5)
+            echo "https://download.pytorch.org/whl/rocm7.2" ;;  # latest stable
+        6.0|6.1)
+            echo "https://download.pytorch.org/whl/rocm6.2" ;;  # closest forward
+        5.*|"")
+            echo "" ;;  # signal failure
+        *)
+            echo "https://download.pytorch.org/whl/rocm6.2" ;;
+    esac
+}
+
+ROCM_VER="${ROCM_VER_OVERRIDE:-$(detect_rocm_version)}"
+if [[ -z "$ROCM_VER" ]]; then
+    echo "[X] ROCm not detected. Install it first or set ROCM_VER_OVERRIDE." >&2
+    exit 1
+fi
+TORCH_INDEX="${TORCH_INDEX_OVERRIDE:-$(select_torch_index "$ROCM_VER")}"
+if [[ -z "$TORCH_INDEX" ]]; then
+    echo "[X] ROCm $ROCM_VER too old. Upgrade to 6.2+." >&2
+    exit 1
+fi
+echo "[+] Detected ROCm: $ROCM_VER"
+echo "[+] PyTorch wheel index: $TORCH_INDEX"
+readonly TORCH_INDEX
 
 # Default GGUF quant for Wan 2.2.
 # 16GB system RAM -> Q4_K_M (safe). 32GB+ -> Q5_K_M. 64GB+ -> Q6_K.

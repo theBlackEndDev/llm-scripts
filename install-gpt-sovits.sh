@@ -11,13 +11,43 @@ readonly SERVICE_USER="sovits"
 readonly WEBUI_PORT=9874
 readonly LAN_CIDR="192.168.0.0/16"
 readonly REPO_URL="https://github.com/RVC-Boss/GPT-SoVITS.git"
-readonly TORCH_INDEX="https://download.pytorch.org/whl/rocm6.2"
 readonly HF_REPO="lj1995/GPT-SoVITS"
 
 log() { printf '\033[1;34m[+]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[!]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || err "Run with sudo."
+
+# Auto-detect ROCm and pick matching PyTorch wheel index.
+detect_rocm_version() {
+    local v=""
+    if command -v rocminfo >/dev/null 2>&1; then
+        v=$(rocminfo 2>/dev/null | awk '/^Runtime Version:|^ROCk module version|RuntimeVersion:/ {print $NF}' | head -1)
+    fi
+    [[ -z "$v" && -f /opt/rocm/.info/version ]] && v=$(< /opt/rocm/.info/version)
+    [[ -z "$v" && -f /opt/rocm/.info/version-dev ]] && v=$(< /opt/rocm/.info/version-dev)
+    if [[ -z "$v" ]] && command -v dpkg >/dev/null 2>&1; then
+        v=$(dpkg -l 2>/dev/null | awk '$2 ~ /^rocm-core$/ {print $3}' | head -1 | cut -d'-' -f1 | cut -d'~' -f1)
+    fi
+    [[ -z "$v" ]] && v=$(ls -d /opt/rocm-*/ 2>/dev/null | head -1 | sed -E 's|.*/rocm-([0-9.]+)/?|\1|')
+    echo "$v"
+}
+select_torch_index() {
+    local mm; mm=$(echo "$1" | cut -d. -f1-2)
+    case "$mm" in
+        6.2|6.3|6.4|7.0|7.1|7.2) echo "https://download.pytorch.org/whl/rocm${mm}" ;;
+        7.3|7.4|7.5)             echo "https://download.pytorch.org/whl/rocm7.2" ;;
+        6.0|6.1)                 echo "https://download.pytorch.org/whl/rocm6.2" ;;
+        5.*|"")                  echo "" ;;
+        *)                       echo "https://download.pytorch.org/whl/rocm6.2" ;;
+    esac
+}
+ROCM_VER="${ROCM_VER_OVERRIDE:-$(detect_rocm_version)}"
+[[ -z "$ROCM_VER" ]] && err "ROCm not detected. Install ROCm first."
+TORCH_INDEX="${TORCH_INDEX_OVERRIDE:-$(select_torch_index "$ROCM_VER")}"
+[[ -z "$TORCH_INDEX" ]] && err "ROCm $ROCM_VER too old. Upgrade to 6.2+."
+log "Detected ROCm: $ROCM_VER  →  PyTorch wheel: $TORCH_INDEX"
+readonly TORCH_INDEX
 
 log "System deps"
 apt-get update

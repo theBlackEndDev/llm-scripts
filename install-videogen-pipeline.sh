@@ -1391,7 +1391,10 @@ PROJECT STRUCTURE:
 EOF
 
 # ---- profile entry for videogen user ----
-sudo -u "${SERVICE_USER}" tee -a "/var/lib/${SERVICE_USER}/.bashrc" >/dev/null <<'EOF'
+SERVICE_HOME=$(getent passwd "${SERVICE_USER}" | cut -d: -f6)
+[[ -z "${SERVICE_HOME}" || ! -d "${SERVICE_HOME}" ]] && err "Home dir for ${SERVICE_USER} missing: '${SERVICE_HOME}'"
+
+sudo -u "${SERVICE_USER}" tee -a "${SERVICE_HOME}/.bashrc" >/dev/null <<'EOF'
 
 # videogen pipeline
 export PATH="/opt/videogen/.venv/bin:$PATH"
@@ -1405,12 +1408,13 @@ cd /opt/videogen 2>/dev/null || true
 EOF
 
 # also create a placeholder secrets file user can populate
-sudo -u "${SERVICE_USER}" tee "/var/lib/${SERVICE_USER}/.civitai_env" >/dev/null <<'EOF'
+sudo -u "${SERVICE_USER}" tee "${SERVICE_HOME}/.civitai_env" >/dev/null <<'EOF'
 # Source this file or copy into ~/.bashrc to enable Civitai paid features.
 # Get key: https://civitai.com/user/account -> API Keys
 # CIVITAI_API_KEY=
 EOF
-sudo chmod 600 "/var/lib/${SERVICE_USER}/.civitai_env"
+chmod 600 "${SERVICE_HOME}/.civitai_env"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${SERVICE_HOME}/.civitai_env"
 
 cat <<EOF
 

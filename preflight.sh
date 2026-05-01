@@ -132,11 +132,19 @@ fi
 
 # ---------- Network ----------
 hdr "Network"
-for url in https://huggingface.co https://github.com https://download.pytorch.org; do
-    if curl -fsS --max-time 8 -I "$url" >/dev/null 2>&1; then
-        ok "$url reachable"
+# Note: download.pytorch.org root returns 403 (CloudFront bucket policy);
+# test an actual wheel index path instead.
+declare -A NET_TESTS=(
+    ["https://huggingface.co"]="HF model registry"
+    ["https://github.com"]="git repos"
+    ["https://download.pytorch.org/whl/rocm6.4/torch_stable.html"]="PyTorch ROCm wheels"
+)
+for url in "${!NET_TESTS[@]}"; do
+    code=$(curl -fsS --max-time 8 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+    if [[ "$code" == "200" || "$code" == "302" ]]; then
+        ok "${NET_TESTS[$url]} reachable ($code)"
     else
-        err "$url unreachable"
+        err "${NET_TESTS[$url]} unreachable (HTTP $code)"
     fi
 done
 

@@ -146,23 +146,28 @@ for spec in \
     fi
 done
 
-# PyTorch wheels: CloudFront 403's on bucket browsing but actual wheel index works.
-# Use pip dry-run as authoritative check.
+# PyTorch wheels: must use a venv (Ubuntu 24.04 system Python is PEP 668 marked).
+# Install scripts already use venvs (/opt/<svc>/.venv), so this only validates index.
+rocm_mm="${ROCM_MM:-6.4}"
+PFT_VENV="/tmp/_preflight_venv"
 if command -v python3 >/dev/null 2>&1; then
-    rocm_mm="${ROCM_MM:-6.4}"
-    if python3 -m pip install --dry-run --quiet --no-deps torch \
+    rm -rf "$PFT_VENV" 2>/dev/null
+    if python3 -m venv "$PFT_VENV" 2>/dev/null && \
+       "$PFT_VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 && \
+       "$PFT_VENV/bin/pip" install --dry-run --quiet --no-deps torch \
             --index-url "https://download.pytorch.org/whl/rocm${rocm_mm}" >/dev/null 2>&1; then
-        ok "PyTorch ROCm $rocm_mm wheel index resolves (pip dry-run)"
+        ok "PyTorch ROCm $rocm_mm wheel index resolves (venv pip dry-run)"
     else
-        # try without dry-run (older pip), just check index page
+        # fallback: PEP 503 simple repo path
         if curl -fsS --max-time 8 "https://download.pytorch.org/whl/rocm${rocm_mm}/torch/" >/dev/null 2>&1; then
-            ok "PyTorch ROCm $rocm_mm wheel index reachable"
+            ok "PyTorch ROCm $rocm_mm wheel index reachable (PEP 503 simple repo)"
         else
-            warn "PyTorch ROCm $rocm_mm wheel test failed. Pip install may still work; rerun with -v if torch install fails."
+            warn "PyTorch ROCm $rocm_mm wheel test failed. Pip install in real venv may still work."
         fi
     fi
+    rm -rf "$PFT_VENV" 2>/dev/null
 else
-    warn "python3 missing — cannot dry-run pytorch wheel test"
+    warn "python3 missing — cannot test pytorch wheel resolution"
 fi
 
 # ---------- Ports ----------

@@ -55,7 +55,7 @@ log "System deps"
 apt-get update
 apt-get install -y --no-install-recommends \
     build-essential cmake git curl jq wget ca-certificates pkg-config \
-    python3.11 python3.11-venv python3.11-dev python3-pip \
+    python3 python3-venv python3-dev python3-pip \
     ffmpeg libsndfile1 libgomp1 \
     nginx ufw
 
@@ -78,7 +78,7 @@ log "Python venv + ROCm PyTorch"
 sudo -u "${SERVICE_USER}" bash <<EOF
 set -euo pipefail
 cd "${INSTALL_DIR}"
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip wheel setuptools
 

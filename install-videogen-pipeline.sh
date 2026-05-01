@@ -16,7 +16,7 @@ err() { printf '\033[1;31m[X]\033[0m %s\n' "$*" >&2; exit 1; }
 log "Deps"
 apt-get update
 apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip \
+    python3 python3-venv python3-pip \
     ffmpeg curl jq just tmux git
 
 # ---- service user (real user, login enabled — owns projects) ----
@@ -35,7 +35,7 @@ log "Python venv + libs"
 sudo -u "${SERVICE_USER}" bash <<'EOF'
 set -euo pipefail
 cd /opt/videogen
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip wheel
 pip install requests websocket-client tomli tomli-w pillow rich typer

@@ -161,7 +161,7 @@ write_profile "dev" '
 PROFILE_DESC="Coding: whisper dictation + small coding LLM"
 START="whisper ollama"
 STOP="comfyui gpt-sovits"
-OLLAMA_MODEL="qwen2.5-coder:7b"   # bump to qwen3-coder:7b once pulled
+OLLAMA_MODEL="qwen3.5:9b"   # bump to qwen3-coder:7b once pulled
 OLLAMA_KEEP="2h"
 EXPECTED_VRAM_GB=7
 EXPECTED_RAM_GB=10
@@ -171,7 +171,7 @@ write_profile "dictate" '
 PROFILE_DESC="Dictation + LLM punctuation cleanup"
 START="whisper ollama"
 STOP="comfyui gpt-sovits"
-OLLAMA_MODEL="qwen2.5:7b"
+OLLAMA_MODEL="qwen3.5:9b"
 OLLAMA_KEEP="1h"
 EXPECTED_VRAM_GB=6
 EXPECTED_RAM_GB=8
@@ -181,7 +181,7 @@ write_profile "assistant" '
 PROFILE_DESC="Voice loop: whisper STT + LLM + GPT-SoVITS TTS"
 START="whisper ollama gpt-sovits"
 STOP="comfyui"
-OLLAMA_MODEL="qwen2.5:7b"
+OLLAMA_MODEL="qwen3.5:9b"
 OLLAMA_KEEP="1h"
 EXPECTED_VRAM_GB=10
 EXPECTED_RAM_GB=14
@@ -263,7 +263,7 @@ write_profile "tts-bench" '
 PROFILE_DESC="GPT-SoVITS inference + small LLM for prompts"
 START="gpt-sovits ollama"
 STOP="comfyui whisper"
-OLLAMA_MODEL="qwen2.5:7b"
+OLLAMA_MODEL="qwen3.5:9b"
 EXPECTED_VRAM_GB=8
 EXPECTED_RAM_GB=14
 '
@@ -280,7 +280,7 @@ write_profile "music-light" '
 PROFILE_DESC="Music gen + small LLM + whisper (full creative loop)"
 START="comfyui ollama whisper"
 STOP="gpt-sovits"
-OLLAMA_MODEL="qwen2.5:7b"
+OLLAMA_MODEL="qwen3.5:9b"
 EXPECTED_VRAM_GB=11
 EXPECTED_RAM_GB=14
 '

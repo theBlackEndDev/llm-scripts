@@ -15,12 +15,16 @@ OUT_DIR="$(dirname "$(readlink -f "$0")")/docs/transcripts"
 mkdir -p "${OUT_DIR}"
 
 CHANNELS=(
+    # --- image / video gen (ComfyUI) ---
     "@TensorAlchemist"     # 8GB VRAM workflows, model breakdowns
     "@sebastiankamph"      # ComfyUI fundamentals, comparisons
     "@OlivioSarikas"       # beginner-friendly, broad coverage
     "@LatentVision"        # technical deep dives
     "@Mickmumpitz"         # character consistency, production
     "@NerdyRodent"         # OSS focus
+    # --- local LLM head-to-head benchmarks ---
+    "@tokenchaser"         # model vs model tests, quant/perf benchmarks
+    "@Bijanbowen"          # local LLM reviews, head-to-head comparisons
 )
 [[ $# -gt 1 ]] && CHANNELS=("${@:2}")
 

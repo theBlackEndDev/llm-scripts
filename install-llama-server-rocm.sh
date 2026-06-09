@@ -7,7 +7,8 @@
 # Tiered model picks (auto-detect via /proc/meminfo):
 #   16GB RAM  -> gpt-oss-20b   (MXFP4, ~12-13GB, runs nearly fully on 6900XT)
 #   32GB RAM  -> qwen3-coder-30b-a3b Q4_K_M  + mistral devstral
-#   64GB RAM  -> qwen3.5-35b-a3b Q4_K_M  + glm-4.7  + devstral
+#   64GB RAM  -> qwen3.5-35b-a3b IQ3_XXS (default) + qwen3-coder-next +
+#                gemma-4-12b + glm-4.7-flash-reap + qwen3.5-122b-a10b (offload)
 #
 # Why llama-server (not Ollama):
 #   - Ollama lacks --n-cpu-moe / --override-tensor for MoE expert offload
@@ -171,16 +172,22 @@ case "${TIER}" in
         DEFAULT_CTX=32768
         ;;
     64gb)
-        log "Pulling qwen3.5-35b-a3b Q4_K_M"
-        hf_pull "unsloth/Qwen3.5-35B-A3B-Instruct-GGUF" "Qwen3.5-35B-A3B-Instruct-Q4_K_M.gguf" || \
-            hf_pull "bartowski/Qwen_Qwen3-30B-A3B-GGUF" "Qwen_Qwen3-30B-A3B-Q4_K_M.gguf"
-        log "Pulling GLM-4.7 (SWE-bench leader)"
-        hf_pull "bartowski/THUDM_GLM-4-32B-0414-GGUF" "THUDM_GLM-4-32B-0414-Q4_K_M.gguf" || warn "glm pull failed (non-fatal)"
-        log "Pulling Mistral Devstral 256K context"
-        hf_pull "unsloth/Devstral-Small-2505-GGUF" "Devstral-Small-2505-Q4_K_M.gguf" || warn "devstral pull failed (non-fatal)"
-        DEFAULT_MODEL="Qwen3.5-35B-A3B-Instruct-Q4_K_M.gguf"
-        DEFAULT_NCPUMOE=24
-        DEFAULT_CTX=65536
+        # Small imatrix quants (UD-IQ3_XXS / IQ4_XS) so the 100B-class fits
+        # 16GB VRAM via CPU expert offload. Filenames verified on HF 2026-06-09.
+        # See docs/RESEARCH-2026-06.md for picks + benchmark rationale.
+        log "Pulling Qwen3.5-35B-A3B (UD-IQ3_XXS, fast daily driver)"
+        hf_pull "unsloth/Qwen3.5-35B-A3B-GGUF" "Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf"
+        log "Pulling Qwen3-Coder-Next (UD-IQ4_XS, agentic coding)"
+        hf_pull "unsloth/Qwen3-Coder-Next-GGUF" "Qwen3-Coder-Next-UD-IQ4_XS.gguf" || warn "qwen3-coder-next pull failed (non-fatal)"
+        log "Pulling Gemma 4 12B (Q8_0, instant in-VRAM coder)"
+        hf_pull "unsloth/gemma-4-12b-it-GGUF" "gemma-4-12b-it-Q8_0.gguf" || warn "gemma4-12b pull failed (non-fatal)"
+        log "Pulling GLM-4.7-Flash-REAP 23B-A3B (IQ4_XS, efficient coder)"
+        hf_pull "unsloth/GLM-4.7-Flash-REAP-23B-A3B-GGUF" "GLM-4.7-Flash-REAP-23B-A3B-IQ4_XS.gguf" || warn "glm-flash pull failed (non-fatal)"
+        log "Pulling Qwen3.5-122B-A10B (UD-IQ3_XXS, max quality — ~45GB)"
+        hf_pull "unsloth/Qwen3.5-122B-A10B-GGUF" "Qwen3.5-122B-A10B-UD-IQ3_XXS.gguf" || warn "qwen3.5-122b pull failed (non-fatal)"
+        DEFAULT_MODEL="Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf"
+        DEFAULT_NCPUMOE=8     # ~fits 16GB VRAM, light offload
+        DEFAULT_CTX=32768
         ;;
 esac
 

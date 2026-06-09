@@ -94,12 +94,17 @@ apply_profile() {
 
     sleep 1
 
-    # llama-server model override (write systemd drop-in before starting)
+    # llama-server overrides (write systemd drop-in before starting).
+    # A profile may override model, expert-offload depth, and context.
     if [[ -n "${LLAMA_MODEL_OVERRIDE:-}" ]] && echo "${START:-}" | grep -qw "llama-server"; then
         echo "  llama-server model: ${LLAMA_MODEL_OVERRIDE}"
         sudo mkdir -p /etc/systemd/system/llama-server.service.d
-        printf "[Service]\nEnvironment=LLAMA_MODEL=%s\n" "${LLAMA_MODEL_OVERRIDE}" \
-            | sudo tee /etc/systemd/system/llama-server.service.d/profile.conf >/dev/null
+        {
+            echo "[Service]"
+            echo "Environment=LLAMA_MODEL=${LLAMA_MODEL_OVERRIDE}"
+            [[ -n "${LLAMA_NCPUMOE_OVERRIDE:-}" ]] && echo "Environment=LLAMA_NCPUMOE=${LLAMA_NCPUMOE_OVERRIDE}"
+            [[ -n "${LLAMA_CTX_OVERRIDE:-}" ]]     && echo "Environment=LLAMA_CTX=${LLAMA_CTX_OVERRIDE}"
+        } | sudo tee /etc/systemd/system/llama-server.service.d/profile.conf >/dev/null
         sudo systemctl daemon-reload
     elif echo "${START:-}" | grep -qw "llama-server"; then
         # clear override -> use unit default
@@ -231,29 +236,55 @@ EXPECTED_RAM_GB=8
 '
 
 write_profile "moe-fast" '
-PROFILE_DESC="MoE via llama-server (gpt-oss 20B on 16GB / 35B-A3B on 64GB)"
+PROFILE_DESC="Fast daily MoE: Qwen3.5-35B-A3B IQ3_XXS (unit default, ~fits VRAM)"
 START="llama-server"
 STOP="ollama comfyui gpt-sovits whisper"
-EXPECTED_VRAM_GB=12
-EXPECTED_RAM_GB=14
+EXPECTED_VRAM_GB=14
+EXPECTED_RAM_GB=10
+'
+
+write_profile "moe-instant" '
+PROFILE_DESC="Instant coder: Gemma 4 12B Q8 (dense, fully in VRAM, zero offload)"
+START="llama-server"
+STOP="ollama comfyui gpt-sovits whisper"
+LLAMA_MODEL_OVERRIDE="gemma-4-12b-it-Q8_0.gguf"
+LLAMA_NCPUMOE_OVERRIDE="0"
+LLAMA_CTX_OVERRIDE="32768"
+EXPECTED_VRAM_GB=13
+EXPECTED_RAM_GB=6
 '
 
 write_profile "moe-coder" '
-PROFILE_DESC="Coding agent MoE (Qwen3-Coder-30B-A3B / Devstral 256K context)"
+PROFILE_DESC="Coding agent MoE: Qwen3-Coder-Next 38B IQ4_XS"
 START="llama-server"
 STOP="ollama comfyui gpt-sovits whisper"
-LLAMA_MODEL_OVERRIDE="Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
-EXPECTED_VRAM_GB=12
-EXPECTED_RAM_GB=20
+LLAMA_MODEL_OVERRIDE="Qwen3-Coder-Next-UD-IQ4_XS.gguf"
+LLAMA_NCPUMOE_OVERRIDE="10"
+LLAMA_CTX_OVERRIDE="32768"
+EXPECTED_VRAM_GB=15
+EXPECTED_RAM_GB=14
+'
+
+write_profile "moe-glm" '
+PROFILE_DESC="Efficient coder: GLM-4.7-Flash-REAP 23B-A3B IQ4_XS (pruned, fast)"
+START="llama-server"
+STOP="ollama comfyui gpt-sovits whisper"
+LLAMA_MODEL_OVERRIDE="GLM-4.7-Flash-REAP-23B-A3B-IQ4_XS.gguf"
+LLAMA_NCPUMOE_OVERRIDE="6"
+LLAMA_CTX_OVERRIDE="32768"
+EXPECTED_VRAM_GB=15
+EXPECTED_RAM_GB=10
 '
 
 write_profile "moe-quality" '
-PROFILE_DESC="Top-tier MoE (GLM-4.7 / Qwen3.5-35B-A3B). Needs 64GB RAM."
+PROFILE_DESC="Top-tier MoE: Qwen3.5-122B-A10B IQ3_XXS (heavy CPU offload). Needs 64GB RAM."
 START="llama-server"
 STOP="ollama comfyui gpt-sovits whisper"
-LLAMA_MODEL_OVERRIDE="THUDM_GLM-4-32B-0414-Q4_K_M.gguf"
-EXPECTED_VRAM_GB=14
-EXPECTED_RAM_GB=40
+LLAMA_MODEL_OVERRIDE="Qwen3.5-122B-A10B-UD-IQ3_XXS.gguf"
+LLAMA_NCPUMOE_OVERRIDE="40"
+LLAMA_CTX_OVERRIDE="65536"
+EXPECTED_VRAM_GB=15
+EXPECTED_RAM_GB=52
 '
 
 write_profile "video-fast" '

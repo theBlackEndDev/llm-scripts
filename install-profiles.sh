@@ -263,14 +263,14 @@ EXPECTED_RAM_GB=6
 '
 
 write_profile "moe-coder" '
-PROFILE_DESC="Coding agent MoE: Qwen3-Coder-Next 38B IQ4_XS"
+PROFILE_DESC="Coding agent MoE: Qwen3-Coder-Next 80B-A3B IQ4_XS (heavy offload)"
 START="llama-server"
 STOP="ollama comfyui gpt-sovits whisper"
 LLAMA_MODEL_OVERRIDE="Qwen3-Coder-Next-UD-IQ4_XS.gguf"
-LLAMA_NCPUMOE_OVERRIDE="10"
+LLAMA_NCPUMOE_OVERRIDE="40"   # 80B/36GB: NCPUMOE<40 OOMs the 16GB GPU (verified)
 LLAMA_CTX_OVERRIDE="32768"
 EXPECTED_VRAM_GB=15
-EXPECTED_RAM_GB=14
+EXPECTED_RAM_GB=31
 '
 
 write_profile "moe-quality" '

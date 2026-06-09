@@ -112,6 +112,14 @@ apply_profile() {
         sudo systemctl daemon-reload
     fi
 
+    # If llama-server is already running, restart it so the new model/offload
+    # actually loads — daemon-reload re-reads the unit but does NOT swap the
+    # in-memory model. Without this, switching between moe-* profiles is a no-op.
+    if echo "${START:-}" | grep -qw "llama-server" && systemctl is-active --quiet llama-server 2>/dev/null; then
+        echo "  llama-server: reload (model/offload changed)"
+        sudo systemctl restart llama-server
+    fi
+
     # start
     for s in ${START:-}; do
         if ! systemctl is-active --quiet "$s" 2>/dev/null; then

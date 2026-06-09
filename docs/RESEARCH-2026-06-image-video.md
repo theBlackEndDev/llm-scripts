@@ -67,15 +67,29 @@ headroom (min ~6GB VRAM via offload). FP8 only on AMD.
 |---|---|---|---|
 | **Ideogram 4** | — | non-commercial | researched above; text rendering king |
 | Qwen-Image **Max 2512** | — | check (Qwen base = Apache) | refresh of our Qwen-Image; skin realism + text |
-| **HunyuanImage 3.0** | 80B MoE / ~13B active | check (Tencent) | largest open image MoE; ultra-long prompts; **62GB RAM makes it viable** |
+| ~~HunyuanImage 3.0~~ | 80B MoE / ~13B active | Tencent Community (commercial-OK) | ❌ **NOT VIABLE** — 24GB VRAM hard floor (we have 16GB), autoregressive (offload-hostile), CUDA/NF4-centric no ROCm. See verdict below. |
 | FLUX.2 | DiT | BFL (commercial tiers) | we have Flux 2 — confirm latest 4MP build |
 | HiDream-I1-Full | — | MIT-ish | strong all-rounder, commercial-OK |
 | Chroma / SANA-Sprint | small | permissive | fast/low-VRAM options |
 | SD 3.5 Large | 8B | Stability community | legacy baseline |
 
-Priority to verify: **HunyuanImage 3.0** (the RAM upgrade's headline image
-unlock — 80B MoE via offload) and **Qwen-Image Max** (commercial-OK upgrade to
-what we run). Both need license + AMD/ComfyUI + VRAM confirmation.
+### HunyuanImage 3.0 — DEEP-DIVE VERDICT: rejected (2026-06-09)
+
+Looked promising (80B MoE, commercial-OK license) but **does not fit 16GB VRAM**:
+- Hard minimum **24GB VRAM** even at NF4 — no documented config runs below it.
+  NF4 on a 24GB card already spills ~22GB to RAM; 16GB is under the floor.
+- **Autoregressive**, not diffusion → CPU/RAM offload is slow and can't drop the
+  resident VRAM below the floor the way Flux/SDXL diffusion can. 62GB RAM does
+  not rescue it.
+- NF4/INT8 paths are CUDA + bitsandbytes; **no ROCm support mentioned** — likely
+  won't run on the 6900XT regardless.
+Conclusion: the RAM upgrade unlocks big *LLM* MoEs (offload-friendly) but NOT
+this autoregressive image MoE. Revisit only with a ≥24GB ROCm card.
+
+Revised priority for the **commercial image-upgrade slot**: **Qwen-Image Max
+2512** — we already run Qwen-Image (proven on our ROCm/ComfyUI stack), Qwen base
+license is permissive, and it targets exactly our weak spots (skin realism, text
+rendering). Verify the Max-2512 GGUF/FP8 + license next.
 
 ## 3. Video candidates to evaluate next
 

@@ -142,8 +142,10 @@ hf_pull() {
         return
     fi
     log "Pulling ${repo} :: ${file}"
+    # Force classic HTTPS transfer: Xet (default in huggingface_hub >=1.x) stalls
+    # on some links, and HF_HUB_ENABLE_HF_TRANSFER is now a deprecated no-op.
     sudo -u "${SERVICE_USER}" \
-        HF_HUB_ENABLE_HF_TRANSFER=1 \
+        HF_HUB_DISABLE_XET=1 \
         "${INSTALL_DIR}/.venv/bin/hf" download "${repo}" "${file}" --local-dir "${MODEL_DIR}"
     # Move into flat MODEL_DIR if HF nested it
     found=$(find "${MODEL_DIR}" -maxdepth 6 -name "$(basename "${file}")" -type f | head -1)

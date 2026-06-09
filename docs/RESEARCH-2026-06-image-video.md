@@ -141,27 +141,88 @@ Revised priority for the **commercial image-upgrade slot**: **Qwen-Image-2512**.
   One-line change: install-comfyui.sh:312 `qwen-image-2512-Q4_K_M.gguf` →
   `qwen-image-2512-Q5_K_M.gguf` (+ workflow `unet_name`). Defer to the batch.
 
-## 3. Video candidates to evaluate next
+## 3. Video models — full landscape (June 2026)
 
-| Model | Params | License | Notes |
+Licenses verified on HF 2026-06-09. 14B-class needs GGUF Q5_K_M for 16GB; clips
+are slow on our card (~10-15 min at 480-720p) — Wan is quality-not-speed.
+
+| Model | License | Status | Good at | Weak at |
+|---|---|---|---|---|
+| **Wan 2.2 14B** (T2V+I2V) | Apache 2.0 | HAVE | best open quality + motion, commercial | slow on 16GB, no native audio |
+| **Wan 2.2 TI2V-5B** | Apache 2.0 | HAVE | lighter/faster Wan, native 1440p, single model | less detail than 14B |
+| **Wan 2.2 Animate-14B** | Apache 2.0 | ⭐ ADD | **character swap + lip-sync**, motion transfer, commercial | not from-scratch gen; needs driving video |
+| **LTX 2.3** | Lightricks (conditional commercial) | HAVE | **near-real-time + native synced AUDIO + 4K + low VRAM** | motion fidelity below Wan |
+| HunyuanVideo 1.5 | Tencent "other" (territorial) | candidate | physics/motion realism (fluid, cloth, dynamics), cinematic | non-Apache, no native audio/I2V in base, 16-24GB |
+| Mochi 1 | Apache 2.0 | candidate | high-fidelity short T2V, commercial-safe | no audio, no I2V, short clips only |
+| SkyReels V2 | "other" (Hunyuan base) | candidate | cinematic humans, facial animation, camera moves | non-Apache license |
+| CogVideoX-5b | custom (free-ish) | candidate | light/fast, 6s clips | low res/quality |
+| ~~Wan 2.5~~ | — | skip | — | appears **API-only**, no open weights |
+
+**Recommended commercial video adds:** **Wan 2.2 Animate** (unlocks character
+swap / lip-sync / avatars — biggest new *capability*) and **Mochi 1** (Apache,
+faster short-clip alternative to the slow Wan 14B). HunyuanVideo 1.5 / SkyReels
+= personal-only until license cleared.
+
+---
+
+## 4. Roles & use-cases — what each model is FOR
+
+Your stack is a toolkit, not one model. Match the model to the job.
+
+### Image — pick by job
+
+| Job | Use | Avoid | License |
 |---|---|---|---|
-| Wan 2.2 14B | 14B MoE | Apache | HAVE — still the open benchmark |
-| LTX 2.3 | light | open | HAVE — fast iteration |
-| **HunyuanVideo** | 13B | Tencent (check commercial) | cinematic, 720p 15s + audio; rivals Runway Gen-4 |
-| Mochi 1 | 10B | Apache 2.0 | high-fidelity short clips, commercial-OK |
-| SkyReels V1 | — | check | human-centric |
+| **Fast drafts / bulk / thumbnails at scale** | **Z-Image Turbo** (~2-3s) | — | Apache ✅ |
+| **Final/hero commercial images** | **HiDream-I1** (MIT) or Qwen-Image-2512 | Z-Image (less detail) | MIT / Apache ✅ |
+| **Text-in-image, signage, UI mockups, infographics** | **Qwen-Image-2512** | Chroma (weak text) | Apache ✅ |
+| **Typography / posters / comics / layout control** | **Ideogram 4** (bounding boxes) | — | non-commercial ⚠️ personal only |
+| **Uncensored / stylized / experimental art** | **Chroma1-HD** | Qwen (more literal) | Apache ✅ |
+| **Anime / illustration / character art** | **SDXL: Illustrious / NoobAI / Pony / Animagine** + LoRAs | photoreal models | mostly permissive (verify) |
+| **Edit / restore / inpaint existing image** | **Qwen-Image-Edit-2511** or **OmniGen2** | from-scratch gen models | Apache ✅ |
+| **Photoreal personal hero** | Flux 2 (HAVE) | — | BFL non-comm ⚠️ |
 
-Priority: **HunyuanVideo** (audio + cinematic) and **Mochi 1** (Apache =
-commercial-safe) as complements to Wan 2.2.
+### Video — pick by job
+
+| Job | Use | Avoid | License |
+|---|---|---|---|
+| **Quality hero shot / B-roll** | **Wan 2.2 14B** (I2V from a still) | LTX (less fidelity) | Apache ✅ |
+| **Fast social clip WITH audio** | **LTX 2.3** (T2V + synced audio, 4K) | Wan (slow, silent) | conditional ✅ |
+| **Talking head / avatar / lip-sync** | **Wan 2.2 Animate** + GPT-SoVITS voice | T2V models | Apache ✅ |
+| **Character swap in existing footage** | **Wan 2.2 Animate** | — | Apache ✅ |
+| **Commercial short clip, faster than Wan 14B** | **Mochi 1** | HunyuanVideo (license) | Apache ✅ |
+| **Physics-heavy / cinematic motion** | HunyuanVideo 1.5 / SkyReels | — | "other" ⚠️ personal |
+| **Quick light test clip** | Wan TI2V-5B or CogVideoX | 14B (slow) | Apache ✅ |
+
+### Example pipelines (chain the toolkit)
+
+1. **Commercial YouTube B-roll:** Qwen-Image-2512 / HiDream (still) → Wan 2.2 I2V
+   (motion) → Frame-Interpolation (smooth) → upscale. All Apache/MIT. ✅
+2. **Fast social short:** Z-Image Turbo (frames) → LTX 2.3 (video + native audio)
+   → done in minutes. ✅
+3. **AI avatar / talking head:** HiDream (character still) → Wan 2.2 Animate
+   (lip-sync to your GPT-SoVITS voice track). ✅
+4. **Anime short:** Illustrious/NoobAI (+character LoRA) → Wan 2.2 I2V.
+5. **Photo restore / product edit:** Qwen-Image-Edit-2511 or OmniGen2. ✅
+6. **Personal poster/comic with text:** Ideogram 4 (typography + panels). ⚠️ personal
+7. **Bulk thumbnail A/B testing:** Z-Image Turbo (speed) or Qwen (text overlays). ✅
+
+> Profiles map to these: `image` (Z-Image/HiDream/Qwen/SDXL), `video-fast`
+> (LTX 2.3), `video-quality` (Wan 2.2). Consider adding `image-edit`
+> (editor models) and `video-animate` (Wan Animate) profiles.
 
 ---
 
 ## Action items (deferred — implement as a batch after picks confirmed)
 
-- [ ] Confirm licenses (commercial vs non-commercial) for HunyuanImage 3.0,
-      Qwen-Image Max, HunyuanVideo, Mochi 1 — license is the gate.
-- [ ] Verify HF repos + FP8/GGUF filenames + AMD/ROCm ComfyUI support for picks.
-- [ ] Batch-edit install-comfyui.sh: Ideogram 4 (+KJNodes) + confirmed picks.
+- [x] Licenses confirmed (HF 2026-06-09): commercial-safe = Z-Image Turbo,
+      HiDream-I1 (MIT), Chroma, Qwen-Image-Edit-2511, OmniGen2, Wan 2.2/Animate,
+      Mochi 1. Personal-only = Ideogram 4, Flux 2-dev, HunyuanVideo, SkyReels.
+- [ ] Verify exact GGUF/FP8 filenames for the chosen adds before wiring
+      (image done for HiDream/Chroma/Qwen; video Mochi/Wan-Animate pending).
+- [ ] Batch-edit install-comfyui.sh: image (Z-Image, HiDream, editor, Chroma,
+      Ideogram 4 +KJNodes, Qwen quant bump) + video (Wan Animate, Mochi 1).
+- [ ] Add profiles: `image-edit` (editors), `video-animate` (Wan Animate).
 - [ ] Deploy downloads to box AFTER the LLM model pull finishes (shared ~10MB/s
       link — see [[box-hustle-llm]]).
 - [ ] Tag non-commercial models in profiles/docs so they're excluded from

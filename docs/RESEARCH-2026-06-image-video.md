@@ -61,17 +61,51 @@ headroom (min ~6GB VRAM via offload). FP8 only on AMD.
 
 ---
 
-## 2. Image candidates to evaluate next
+## 2. Image models — full landscape (June 2026)
 
-| Model | Params | License | Notes vs our stack |
+Licenses + 16GB-VRAM fit verified on HF 2026-06-09. **Commercial = usable for
+monetized YouTube.** GGUF runs via our existing city96 ComfyUI-GGUF node.
+
+### A. General base — COMMERCIAL-safe, fits 16GB ⭐ (the additions that matter)
+
+| Model | License | Arch | 16GB fit | Why |
+|---|---|---|---|---|
+| **Z-Image Turbo** | Apache 2.0 | distilled DiT | fp8 / GGUF, ~2-3s/img (8 steps) | **speed champion**, "beats Flux.2", sub-3s. Best fast daily driver. Alibaba Tongyi, Nov 2025. |
+| **HiDream-I1-Full** | **MIT** | 17B sparse DiT | GGUF Q4_K_M 10.7GB / Q5_K_M 12.1GB | top-tier quality all-rounder, fully commercial |
+| Qwen-Image-2512 | Apache 2.0 | 20B MMDiT | GGUF Q4_K_M 12.3GB | ✅ HAVE; bump Q4→Q5 (see verdict) |
+| **Chroma1-HD** | Apache 2.0 | 8.9B (Flux-schnell base) | GGUF Q4_0 **5GB** | uncensored, tiny, flexible, de-distilled |
+| SANA / SANA-Sprint | NVIDIA (check) | 0.6B linear-DiT | tiny | 20× smaller than Flux-12B, 100× throughput |
+
+### B. Editing / instruction — COMMERCIAL (we currently have NO editor)
+
+| Model | License | 16GB fit | Why |
 |---|---|---|---|
-| **Ideogram 4** | — | non-commercial | researched above; text rendering king |
-| Qwen-Image-2512 | 20B MMDiT | **Apache 2.0** | ✅ **ALREADY INSTALLED** (Q4_K_M). "Max" = closed API, no open weights. Only move = quant bump. See verdict. |
-| ~~HunyuanImage 3.0~~ | 80B MoE / ~13B active | Tencent Community (commercial-OK) | ❌ **NOT VIABLE** — 24GB VRAM hard floor (we have 16GB), autoregressive (offload-hostile), CUDA/NF4-centric no ROCm. See verdict below. |
-| FLUX.2 | DiT | BFL (commercial tiers) | we have Flux 2 — confirm latest 4MP build |
-| HiDream-I1-Full | — | MIT-ish | strong all-rounder, commercial-OK |
-| Chroma / SANA-Sprint | small | permissive | fast/low-VRAM options |
-| SD 3.5 Large | 8B | Stability community | legacy baseline |
+| **Qwen-Image-Edit-2511** | Apache 2.0 | ~Qwen-Image size | pairs with our Qwen-Image; great restoration/instruction edit |
+| **OmniGen2** | Apache 2.0 | 7B (3B+4B), ComfyUI native | unified gen+edit, uses Qwen-VL-2.5 |
+| Flux Kontext | BFL non-comm | fp8 | edit; non-commercial |
+
+### C. General base — NON-COMMERCIAL / closed (personal only or not self-hostable)
+
+| Model | Status | Note |
+|---|---|---|
+| Ideogram 4 | non-commercial | text-render king; planned (personal), see §1 |
+| FLUX.2 [dev] | BFL non-comm | 32B — struggles on 16GB without heavy quant + slow offload; we have Flux 2 |
+| **Nano-Banana / NB2 / Pro** | **CLOSED — Google API only** | NOT open weights. "Open-source Nano-Banana" videos are clickbait — it's a ComfyUI *partner API node*, not self-hostable. Skip. |
+| ~~HunyuanImage 3.0~~ | rejected | 24GB VRAM floor — see verdict below |
+
+### D. Anime / illustration — SDXL ecosystem (all run easily on 16GB)
+
+Illustrious XL, **NoobAI XL** (v-pred, highest quality, CFG ~3.5), Pony Diffusion
+v6/v7, **Animagine XL 4.0** (cleanest line art, 8.4M-image train). Civitai
+community checkpoints, mostly permissive/Fair-AI licenses (verify per-model for
+commercial). We already support the SDXL pipeline — these are drop-in checkpoints.
+
+### Recommended commercial additions (priority order)
+1. **Z-Image Turbo** — fast Apache daily driver (huge speed win on our rig)
+2. **HiDream-I1-Full** (MIT) — commercial quality all-rounder
+3. **Qwen-Image-Edit-2511** or **OmniGen2** — adds editing (capability gap today)
+4. **Chroma1-HD** — uncensored/flexible, 5GB
+Personal-only: **Ideogram 4** (text rendering).
 
 ### HunyuanImage 3.0 — DEEP-DIVE VERDICT: rejected (2026-06-09)
 
@@ -143,3 +177,8 @@ commercial-safe) as complements to Wan 2.2.
 - [AI Search — "New BEST local AI image generator" (yt OA4gchz1Zcs)](https://www.youtube.com/watch?v=OA4gchz1Zcs)
 - [BentoML — open-source image models 2026](https://www.bentoml.com/blog/a-guide-to-open-source-image-generation-models)
 - [Hyperstack — open-source video models 2026](https://www.hyperstack.cloud/blog/case-study/best-open-source-video-generation-models)
+- [Tongyi-MAI/Z-Image-Turbo (HF, Apache 2.0)](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) · [Z-Image Turbo ComfyUI guide](https://docs.comfy.org/tutorials/image/z-image/z-image-turbo)
+- [HiDream-ai/HiDream-I1-Full (HF, MIT)](https://huggingface.co/HiDream-ai/HiDream-I1-Full) · [city96 HiDream GGUF](https://huggingface.co/city96/HiDream-I1-Full-gguf)
+- [lodestones/Chroma (HF, Apache 2.0)](https://huggingface.co/lodestones/Chroma)
+- [OmniGen2 ComfyUI native](https://docs.comfy.org/tutorials/image/omnigen/omnigen2) · [Qwen/Qwen-Image-Edit-2511 (HF, Apache 2.0)](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
+- [Diffusion Doodles — Z-Image/Qwen-2512/Flux.2 rundown](https://medium.com/diffusion-doodles/model-rundown-z-image-turbo-qwen-image-2512-edit-2511-flux-2-dev-fc787f5e87ad)

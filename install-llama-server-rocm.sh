@@ -181,8 +181,6 @@ case "${TIER}" in
         hf_pull "unsloth/Qwen3-Coder-Next-GGUF" "Qwen3-Coder-Next-UD-IQ4_XS.gguf" || warn "qwen3-coder-next pull failed (non-fatal)"
         log "Pulling Gemma 4 12B (Q8_0, instant in-VRAM coder)"
         hf_pull "unsloth/gemma-4-12b-it-GGUF" "gemma-4-12b-it-Q8_0.gguf" || warn "gemma4-12b pull failed (non-fatal)"
-        log "Pulling GLM-4.7-Flash-REAP 23B-A3B (IQ4_XS, efficient coder)"
-        hf_pull "unsloth/GLM-4.7-Flash-REAP-23B-A3B-GGUF" "GLM-4.7-Flash-REAP-23B-A3B-IQ4_XS.gguf" || warn "glm-flash pull failed (non-fatal)"
         log "Pulling Qwen3.5-122B-A10B (UD-IQ3_XXS, max quality — ~45GB)"
         hf_pull "unsloth/Qwen3.5-122B-A10B-GGUF" "Qwen3.5-122B-A10B-UD-IQ3_XXS.gguf" || warn "qwen3.5-122b pull failed (non-fatal)"
         DEFAULT_MODEL="Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf"

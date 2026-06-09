@@ -91,8 +91,8 @@ Transcripts: `docs/transcripts/{tokenchaser,Bijanbowen}/`.
 
 - [x] Update `install-llama-server-rocm.sh` 64gb tier: quants switched to
       `UD-IQ3_XXS` / `IQ4_XS`, models repointed per mapping above.
-- [x] Add `moe-instant` (Gemma 4 12B Q8); also `moe-glm` (GLM-4.7-Flash-REAP).
-      Extended profile override to carry per-model `NCPUMOE` + `CTX`.
+- [x] Add `moe-instant` (Gemma 4 12B Q8). Extended profile override to carry
+      per-model `NCPUMOE` + `CTX`. (GLM-4.7-Flash dropped — not wanted.)
 - [x] Verify HF repos exist before wiring — confirmed on HF 2026-06-09
       (all 5 unsloth repos, single-file GGUFs). Fragile fallback chain removed
       (was the silent `DEFAULT_MODEL` name-mismatch source).

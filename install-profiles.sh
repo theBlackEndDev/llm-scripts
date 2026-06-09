@@ -265,17 +265,6 @@ EXPECTED_VRAM_GB=15
 EXPECTED_RAM_GB=14
 '
 
-write_profile "moe-glm" '
-PROFILE_DESC="Efficient coder: GLM-4.7-Flash-REAP 23B-A3B IQ4_XS (pruned, fast)"
-START="llama-server"
-STOP="ollama comfyui gpt-sovits whisper"
-LLAMA_MODEL_OVERRIDE="GLM-4.7-Flash-REAP-23B-A3B-IQ4_XS.gguf"
-LLAMA_NCPUMOE_OVERRIDE="6"
-LLAMA_CTX_OVERRIDE="32768"
-EXPECTED_VRAM_GB=15
-EXPECTED_RAM_GB=10
-'
-
 write_profile "moe-quality" '
 PROFILE_DESC="Top-tier MoE: Qwen3.5-122B-A10B IQ3_XXS (heavy CPU offload). Needs 64GB RAM."
 START="llama-server"

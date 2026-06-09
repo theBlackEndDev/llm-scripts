@@ -20,6 +20,23 @@ set -euo pipefail
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo."; exit 1; }
 
+# ---- args ----
+NO_PULL=""
+NO_BUILD=""
+for arg in "$@"; do
+    case "$arg" in
+        --no-pull) NO_PULL=1 ;;
+        --no-build) NO_BUILD=1 ;;
+        -h|--help)
+            echo "Usage: sudo $0 [--no-pull] [--no-build]"
+            echo "  --no-pull   re-detect tier + rewrite unit, skip model downloads"
+            echo "  --no-build  skip llama.cpp clone/rebuild (reuse existing binary)"
+            echo "  both        fast unit-only refresh (e.g. after a RAM upgrade)"
+            exit 0 ;;
+        *) echo "Unknown arg: $arg (try --help)"; exit 1 ;;
+    esac
+done
+
 readonly INSTALL_DIR="/opt/llama-cpp"
 readonly MODEL_DIR="/opt/llama-cpp/models"
 readonly SERVICE_USER="llama"
@@ -47,12 +64,17 @@ fi
 log "Tier: ${TIER}"
 
 # ---- system deps ----
-log "System deps"
-apt-get update
-apt-get install -y --no-install-recommends \
-    build-essential cmake git curl ca-certificates \
-    python3 python3-venv python3-pip \
-    libcurl4-openssl-dev pkg-config
+readonly BIN="${INSTALL_DIR}/src/build/bin/llama-server"
+if [[ -n "${NO_BUILD}" && -n "${NO_PULL}" ]]; then
+    log "Skipping system deps (--no-build --no-pull)"
+else
+    log "System deps"
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake git curl ca-certificates \
+        python3 python3-venv python3-pip \
+        libcurl4-openssl-dev pkg-config
+fi
 
 # ---- service user ----
 if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -65,16 +87,20 @@ usermod -aG video,render "${SERVICE_USER}"
 mkdir -p "${INSTALL_DIR}" "${MODEL_DIR}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
-if [[ ! -d "${INSTALL_DIR}/src/.git" ]]; then
-    log "Cloning llama.cpp"
-    sudo -u "${SERVICE_USER}" git clone --depth=1 https://github.com/ggml-org/llama.cpp "${INSTALL_DIR}/src"
+if [[ -n "${NO_BUILD}" ]]; then
+    [[ -x "${BIN}" ]] || err "--no-build: no existing binary at ${BIN}. Run without --no-build first."
+    log "Skipping llama.cpp build (--no-build), reusing ${BIN}"
 else
-    log "Updating llama.cpp"
-    sudo -u "${SERVICE_USER}" git -C "${INSTALL_DIR}/src" pull --ff-only || warn "git pull failed (non-fatal)"
-fi
+    if [[ ! -d "${INSTALL_DIR}/src/.git" ]]; then
+        log "Cloning llama.cpp"
+        sudo -u "${SERVICE_USER}" git clone --depth=1 https://github.com/ggml-org/llama.cpp "${INSTALL_DIR}/src"
+    else
+        log "Updating llama.cpp"
+        sudo -u "${SERVICE_USER}" git -C "${INSTALL_DIR}/src" pull --ff-only || warn "git pull failed (non-fatal)"
+    fi
 
-log "Building llama.cpp with HIP + flash attention (this takes a while)"
-sudo -u "${SERVICE_USER}" bash <<EOF
+    log "Building llama.cpp with HIP + flash attention (this takes a while)"
+    sudo -u "${SERVICE_USER}" bash <<EOF
 set -euo pipefail
 export PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:\${PATH}"
 cd ${INSTALL_DIR}/src
@@ -92,17 +118,24 @@ cmake -B build \\
     -DLLAMA_CURL=ON
 cmake --build build --config Release -j\$(nproc)
 EOF
+fi
 
 # ---- python venv for hf download ----
-if [[ ! -d "${INSTALL_DIR}/.venv" ]]; then
-    sudo -u "${SERVICE_USER}" python3 -m venv "${INSTALL_DIR}/.venv"
+if [[ -z "${NO_PULL}" ]]; then
+    if [[ ! -d "${INSTALL_DIR}/.venv" ]]; then
+        sudo -u "${SERVICE_USER}" python3 -m venv "${INSTALL_DIR}/.venv"
+    fi
+    sudo -u "${SERVICE_USER}" "${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip huggingface_hub hf_transfer
 fi
-sudo -u "${SERVICE_USER}" "${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip huggingface_hub hf_transfer
 
 # ---- helper: hf download wrapper ----
 hf_pull() {
     local repo="$1" file="$2"
     local dest="${MODEL_DIR}/$(basename "${file}")"
+    if [[ -n "${NO_PULL}" ]]; then
+        [[ -s "${dest}" ]] || warn "--no-pull: $(basename "${file}") missing from ${MODEL_DIR}"
+        return
+    fi
     if [[ -s "${dest}" ]]; then
         log "Already have $(basename "${file}")"
         return

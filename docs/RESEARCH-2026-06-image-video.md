@@ -66,7 +66,7 @@ headroom (min ~6GB VRAM via offload). FP8 only on AMD.
 | Model | Params | License | Notes vs our stack |
 |---|---|---|---|
 | **Ideogram 4** | — | non-commercial | researched above; text rendering king |
-| Qwen-Image **Max 2512** | — | check (Qwen base = Apache) | refresh of our Qwen-Image; skin realism + text |
+| Qwen-Image-2512 | 20B MMDiT | **Apache 2.0** | ✅ **ALREADY INSTALLED** (Q4_K_M). "Max" = closed API, no open weights. Only move = quant bump. See verdict. |
 | ~~HunyuanImage 3.0~~ | 80B MoE / ~13B active | Tencent Community (commercial-OK) | ❌ **NOT VIABLE** — 24GB VRAM hard floor (we have 16GB), autoregressive (offload-hostile), CUDA/NF4-centric no ROCm. See verdict below. |
 | FLUX.2 | DiT | BFL (commercial tiers) | we have Flux 2 — confirm latest 4MP build |
 | HiDream-I1-Full | — | MIT-ish | strong all-rounder, commercial-OK |
@@ -86,10 +86,26 @@ Looked promising (80B MoE, commercial-OK license) but **does not fit 16GB VRAM**
 Conclusion: the RAM upgrade unlocks big *LLM* MoEs (offload-friendly) but NOT
 this autoregressive image MoE. Revisit only with a ≥24GB ROCm card.
 
-Revised priority for the **commercial image-upgrade slot**: **Qwen-Image Max
-2512** — we already run Qwen-Image (proven on our ROCm/ComfyUI stack), Qwen base
-license is permissive, and it targets exactly our weak spots (skin realism, text
-rendering). Verify the Max-2512 GGUF/FP8 + license next.
+Revised priority for the **commercial image-upgrade slot**: **Qwen-Image-2512**.
+
+### Qwen-Image-2512 — DEEP-DIVE VERDICT: already installed; quant bump only (2026-06-09)
+
+- **"Qwen-Image-Max" is Alibaba's closed API tier — no open weights.** The
+  self-hostable model is `Qwen/Qwen-Image-2512` (20B MMDiT, **Apache 2.0**,
+  released 2025-12-31). Fully commercial-safe — the go-to for monetized work.
+- **We already run it.** install-comfyui.sh lines 311-314 pull
+  `unsloth/Qwen-Image-2512-GGUF` Q4_K_M (12.33GB) + qwen2.5-vl-7b encoder + VAE,
+  via the city96 ComfyUI-GGUF node we already have.
+- Diffusion (MMDiT) → offload-friendly; unlike HunyuanImage it scales down
+  cleanly. No VRAM-floor problem.
+- **Only actionable upgrade: bump the quant** now that 62GB RAM gives headroom:
+  | Quant | Size | 16GB VRAM |
+  |---|---|---|
+  | Q4_K_M (current) | 12.33GB | comfortable |
+  | **Q5_K_M (recommend)** | 13.96GB | resident, ~2GB headroom |
+  | Q6_K | 15.66GB | tight resident; OK via offload |
+  One-line change: install-comfyui.sh:312 `qwen-image-2512-Q4_K_M.gguf` →
+  `qwen-image-2512-Q5_K_M.gguf` (+ workflow `unet_name`). Defer to the batch.
 
 ## 3. Video candidates to evaluate next
 

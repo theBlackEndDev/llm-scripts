@@ -198,9 +198,9 @@ if command -v ufw >/dev/null 2>&1; then
     ufw allow from "${LAN_CIDR}" to any port ${PORT} proto tcp comment "llama-server" || true
 fi
 
-# ---- enable + start ----
+# ---- install unit (NOT enabled by default — profile system owns lifecycle) ----
 systemctl daemon-reload
-systemctl enable --now llama-server
+systemctl start llama-server
 
 sleep 8
 log "Smoke test"

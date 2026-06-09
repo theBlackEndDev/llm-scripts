@@ -56,7 +56,7 @@ show_status() {
     bold "Current profile: $(cat "${CURRENT}" 2>/dev/null || echo '<none>')"
     echo
     bold "Services:"
-    for s in ollama whisper gpt-sovits comfyui; do
+    for s in ollama whisper gpt-sovits comfyui llama-server; do
         if systemctl list-unit-files 2>/dev/null | grep -q "^${s}\.service"; then
             local state
             state=$(systemctl is-active "$s" 2>/dev/null || echo "unknown")
@@ -165,7 +165,7 @@ EOF
 write_profile "off" '
 PROFILE_DESC="Idle: stop all GPU services"
 START=""
-STOP="ollama whisper gpt-sovits comfyui"
+STOP="ollama whisper gpt-sovits comfyui llama-server"
 EXPECTED_VRAM_GB=0
 EXPECTED_RAM_GB=2
 '
@@ -173,7 +173,7 @@ EXPECTED_RAM_GB=2
 write_profile "dev" '
 PROFILE_DESC="Coding: whisper dictation + small coding LLM"
 START="whisper ollama"
-STOP="comfyui gpt-sovits"
+STOP="comfyui gpt-sovits llama-server"
 OLLAMA_MODEL="qwen3.5:9b"   # bump to qwen3-coder:7b once pulled
 OLLAMA_KEEP="2h"
 EXPECTED_VRAM_GB=7
@@ -183,7 +183,7 @@ EXPECTED_RAM_GB=10
 write_profile "dictate" '
 PROFILE_DESC="Dictation + LLM punctuation cleanup"
 START="whisper ollama"
-STOP="comfyui gpt-sovits"
+STOP="comfyui gpt-sovits llama-server"
 OLLAMA_MODEL="qwen3.5:9b"
 OLLAMA_KEEP="1h"
 EXPECTED_VRAM_GB=6
@@ -193,7 +193,7 @@ EXPECTED_RAM_GB=8
 write_profile "assistant" '
 PROFILE_DESC="Voice loop: whisper STT + LLM + GPT-SoVITS TTS"
 START="whisper ollama gpt-sovits"
-STOP="comfyui"
+STOP="comfyui llama-server"
 OLLAMA_MODEL="qwen3.5:9b"
 OLLAMA_KEEP="1h"
 EXPECTED_VRAM_GB=10
@@ -203,7 +203,7 @@ EXPECTED_RAM_GB=14
 write_profile "chat-big" '
 PROFILE_DESC="Heavy reasoning: GPT-OSS 20B Q4"
 START="ollama"
-STOP="comfyui gpt-sovits whisper"
+STOP="comfyui gpt-sovits whisper llama-server"
 OLLAMA_MODEL="gpt-oss:20b"
 OLLAMA_KEEP="2h"
 EXPECTED_VRAM_GB=12
@@ -213,7 +213,7 @@ EXPECTED_RAM_GB=18
 write_profile "gemma4-26b" '
 PROFILE_DESC="Gemma 4 26B Q4_K_M (vision, 256K context). Needs 32GB+ RAM."
 START="ollama"
-STOP="comfyui gpt-sovits whisper"
+STOP="comfyui gpt-sovits whisper llama-server"
 OLLAMA_MODEL="gemma4:26b"
 OLLAMA_KEEP="2h"
 EXPECTED_VRAM_GB=10
@@ -223,7 +223,7 @@ EXPECTED_RAM_GB=24
 write_profile "gemma4-light" '
 PROFILE_DESC="Gemma 4 e4b (small, fast, fits everywhere)"
 START="whisper ollama"
-STOP="comfyui gpt-sovits"
+STOP="comfyui gpt-sovits llama-server"
 OLLAMA_MODEL="gemma4:e4b"
 OLLAMA_KEEP="1h"
 EXPECTED_VRAM_GB=5
@@ -259,7 +259,7 @@ EXPECTED_RAM_GB=40
 write_profile "video-fast" '
 PROFILE_DESC="Video gen: LTX 2.3 22B (fast iter, native audio). Needs 64GB+ RAM."
 START="comfyui"
-STOP="ollama whisper gpt-sovits"
+STOP="ollama whisper gpt-sovits llama-server"
 EXPECTED_VRAM_GB=14
 EXPECTED_RAM_GB=20
 '
@@ -267,7 +267,7 @@ EXPECTED_RAM_GB=20
 write_profile "video-quality" '
 PROFILE_DESC="Video gen: Wan 2.2 14B (motion-realistic hero shots)"
 START="comfyui"
-STOP="ollama whisper gpt-sovits"
+STOP="ollama whisper gpt-sovits llama-server"
 EXPECTED_VRAM_GB=13
 EXPECTED_RAM_GB=12
 '
@@ -275,7 +275,7 @@ EXPECTED_RAM_GB=12
 write_profile "image" '
 PROFILE_DESC="Image gen: Flux Krea / SDXL via ComfyUI"
 START="comfyui"
-STOP="ollama whisper gpt-sovits"
+STOP="ollama whisper gpt-sovits llama-server"
 EXPECTED_VRAM_GB=12
 EXPECTED_RAM_GB=10
 '
@@ -283,7 +283,7 @@ EXPECTED_RAM_GB=10
 write_profile "train-tts" '
 PROFILE_DESC="GPT-SoVITS training run (voice fine-tune)"
 START="gpt-sovits"
-STOP="ollama whisper comfyui"
+STOP="ollama whisper comfyui llama-server"
 EXPECTED_VRAM_GB=14
 EXPECTED_RAM_GB=20
 '
@@ -291,7 +291,7 @@ EXPECTED_RAM_GB=20
 write_profile "tts-bench" '
 PROFILE_DESC="GPT-SoVITS inference + small LLM for prompts"
 START="gpt-sovits ollama"
-STOP="comfyui whisper"
+STOP="comfyui whisper llama-server"
 OLLAMA_MODEL="qwen3.5:9b"
 EXPECTED_VRAM_GB=8
 EXPECTED_RAM_GB=14
@@ -300,7 +300,7 @@ EXPECTED_RAM_GB=14
 write_profile "music" '
 PROFILE_DESC="ACE-Step 1.5 / MusicGen via ComfyUI (low VRAM, can coexist)"
 START="comfyui"
-STOP="gpt-sovits"
+STOP="gpt-sovits llama-server"
 EXPECTED_VRAM_GB=4
 EXPECTED_RAM_GB=8
 '
@@ -308,7 +308,7 @@ EXPECTED_RAM_GB=8
 write_profile "music-light" '
 PROFILE_DESC="Music gen + small LLM + whisper (full creative loop)"
 START="comfyui ollama whisper"
-STOP="gpt-sovits"
+STOP="gpt-sovits llama-server"
 OLLAMA_MODEL="qwen3.5:9b"
 EXPECTED_VRAM_GB=11
 EXPECTED_RAM_GB=14

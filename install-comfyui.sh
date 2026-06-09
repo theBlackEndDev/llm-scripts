@@ -144,6 +144,7 @@ clone_or_pull https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git Comf
 clone_or_pull https://github.com/kijai/ComfyUI-WanVideoWrapper.git ComfyUI-WanVideoWrapper
 clone_or_pull https://github.com/cubiq/ComfyUI_essentials.git ComfyUI_essentials
 clone_or_pull https://github.com/rgthree/rgthree-comfy.git rgthree-comfy
+clone_or_pull https://github.com/kijai/ComfyUI-KJNodes.git ComfyUI-KJNodes   # Ideogram 4 bounding-box / prompt builder
 clone_or_pull https://github.com/ChenDarYen/ComfyUI-NAG.git ComfyUI-NAG || true
 
 # Music gen
@@ -171,7 +172,7 @@ done
 EOF
 
 # ---- model downloads ----
-log "Downloading models (Wan 2.2, LTX, Flux 2, Krea, Qwen-Image, SDXL, MusicGen, ACE-Step, Foley, IndexTTS-2)"
+log "Downloading models (Wan 2.2 +Animate, Mochi, LTX, Flux 2, Krea, Qwen-Image +Edit, Z-Image, HiDream, Chroma, Ideogram4, SDXL, MusicGen, ACE-Step, Foley, IndexTTS-2)"
 log "Total disk: ~80-100GB. Network: high. This takes a while."
 log "If you have an HF_TOKEN env set, it will be used for any gated repos."
 MODELS_DIR="${INSTALL_DIR}/models"
@@ -278,6 +279,15 @@ grab(WAN_REPACK, "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise
 grab("Comfy-Org/Wan_2.1_ComfyUI_repackaged",
      "split_files/clip_vision/clip_vision_h.safetensors", "clip_vision")
 
+# ===== VIDEO: Wan 2.2 Animate (Apache 2.0 — character swap + lip-sync) =====
+# Reuses umt5 encoder + wan2.2_vae + clip_vision_h already pulled above.
+grab("QuantStack/Wan2.2-Animate-14B-GGUF", "Wan2.2-Animate-14B-Q5_K_M.gguf", "diffusion_models")
+
+# ===== VIDEO: Mochi 1 (Apache 2.0 — high-fidelity short T2V) =====
+grab("Comfy-Org/mochi_preview_repackaged", "split_files/diffusion_models/mochi_preview_fp8_scaled.safetensors", "diffusion_models")
+grab("Comfy-Org/mochi_preview_repackaged", "split_files/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")  # shared w/ HiDream
+grab("Comfy-Org/mochi_preview_repackaged", "split_files/vae/mochi_vae.safetensors", "vae")
+
 # ===== VIDEO: LTX 2.3 (gated on INSTALL_LTX, needs 64GB+ RAM) =====
 if install_ltx:
     print("[info] LTX 2.3 install gated on — fetching")
@@ -308,10 +318,37 @@ grab("Comfy-Org/flux2-dev",      "split_files/text_encoders/mistral_3_small_flux
 grab("Comfy-Org/flux2-dev",      "split_files/vae/flux2-vae.safetensors", "vae")
 grab("Comfy-Org/flux2-dev",      "split_files/loras/Flux2TurboComfyv2.safetensors", "loras")
 
-# ===== IMAGE: Qwen-Image-2512 (lowercase filenames per actual repo) =====
-grab("unsloth/Qwen-Image-2512-GGUF",  "qwen-image-2512-Q4_K_M.gguf", "diffusion_models")
+# ===== IMAGE: Qwen-Image-2512 (Apache 2.0; Q5_K_M for more quality, 62GB RAM gives headroom) =====
+grab("unsloth/Qwen-Image-2512-GGUF",  "qwen-image-2512-Q5_K_M.gguf", "diffusion_models")
 grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "text_encoders")
 grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/vae/qwen_image_vae.safetensors", "vae")
+
+# ===== IMAGE: Z-Image Turbo (Apache 2.0 — FAST commercial daily driver, ~2-3s/img) =====
+grab("Comfy-Org/z_image_turbo", "split_files/diffusion_models/z_image_turbo_bf16.safetensors", "diffusion_models")
+grab("Comfy-Org/z_image_turbo", "split_files/text_encoders/qwen_3_4b.safetensors", "text_encoders")
+grab("Comfy-Org/z_image_turbo", "split_files/vae/ae.safetensors", "vae")  # flux ae (shared)
+
+# ===== IMAGE: HiDream-I1-Full (MIT — commercial quality all-rounder) =====
+# GGUF diffusion (fits 16GB) + HiDream's 4-encoder stack (clip_l/g, llama3.1, t5xxl) + ae VAE
+grab("city96/HiDream-I1-Full-gguf", "hidream-i1-full-Q5_K_M.gguf", "diffusion_models")
+grab("Comfy-Org/HiDream-I1_ComfyUI", "split_files/text_encoders/clip_l_hidream.safetensors", "text_encoders")
+grab("Comfy-Org/HiDream-I1_ComfyUI", "split_files/text_encoders/clip_g_hidream.safetensors", "text_encoders")
+grab("Comfy-Org/HiDream-I1_ComfyUI", "split_files/text_encoders/llama_3.1_8b_instruct_fp8_scaled.safetensors", "text_encoders")
+grab("Comfy-Org/HiDream-I1_ComfyUI", "split_files/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders")
+grab("Comfy-Org/HiDream-I1_ComfyUI", "split_files/vae/ae.safetensors", "vae")
+
+# ===== IMAGE: Chroma1-HD (Apache 2.0 — uncensored, 5GB; reuses t5xxl + flux ae) =====
+grab("silveroxides/Chroma-GGUF", "Chroma1-HD/Chroma1-HD-Q4_0.gguf", "diffusion_models")
+
+# ===== IMAGE EDITING: Qwen-Image-Edit-2511 (Apache 2.0; reuses Qwen-Image encoder + VAE) =====
+grab("unsloth/Qwen-Image-Edit-2511-GGUF", "qwen-image-edit-2511-Q4_K_M.gguf", "diffusion_models")
+
+# ===== IMAGE: Ideogram 4 (NON-COMMERCIAL — personal/exploration ONLY; text-render king) =====
+# License: ideogram-non-commercial. Do NOT use for monetized work. Needs KJNodes.
+grab("Comfy-Org/Ideogram-4", "diffusion_models/ideogram4_fp8_scaled.safetensors", "diffusion_models", gated=True)
+grab("Comfy-Org/Ideogram-4", "diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors", "diffusion_models", gated=True)
+grab("Comfy-Org/Ideogram-4", "text_encoders/qwen3vl_8b_fp8_scaled.safetensors", "text_encoders", gated=True)
+grab("Comfy-Org/Ideogram-4", "vae/flux2-vae.safetensors", "vae")  # shared with Flux 2
 
 # ===== IMAGE: Flux.1 Krea Dev (skin specialist) =====
 grab("QuantStack/FLUX.1-Krea-dev-GGUF",   "flux1-krea-dev-Q8_0.gguf", "diffusion_models")

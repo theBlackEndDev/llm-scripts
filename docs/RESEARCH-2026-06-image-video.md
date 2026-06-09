@@ -220,8 +220,10 @@ Your stack is a toolkit, not one model. Match the model to the job.
       Mochi 1. Personal-only = Ideogram 4, Flux 2-dev, HunyuanVideo, SkyReels.
 - [ ] Verify exact GGUF/FP8 filenames for the chosen adds before wiring
       (image done for HiDream/Chroma/Qwen; video Mochi/Wan-Animate pending).
-- [ ] Batch-edit install-comfyui.sh: image (Z-Image, HiDream, editor, Chroma,
-      Ideogram 4 +KJNodes, Qwen quant bump) + video (Wan Animate, Mochi 1).
+- [x] Batch-edited install-comfyui.sh (2026-06-09): image (Z-Image Turbo,
+      HiDream-I1 Q5, Qwen-Image-Edit-2511, Chroma1-HD, Ideogram 4 +KJNodes,
+      Qwen-2512 Q4→Q5) + video (Wan 2.2 Animate Q5, Mochi 1 fp8). Filenames
+      verified on HF; reuses existing encoders/VAEs.
 - [ ] Add profiles: `image-edit` (editors), `video-animate` (Wan Animate).
 - [ ] Deploy downloads to box AFTER the LLM model pull finishes (shared ~10MB/s
       link — see [[box-hustle-llm]]).

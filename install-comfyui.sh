@@ -180,7 +180,9 @@ sudo -u "${SERVICE_USER}" --preserve-env=HF_TOKEN,HUGGING_FACE_HUB_TOKEN bash <<
 set -euo pipefail
 cd "${INSTALL_DIR}"
 source .venv/bin/activate
-export HF_HUB_ENABLE_HF_TRANSFER=1
+# Force classic HTTPS transfer: Xet (default in huggingface_hub >=1.x) stalls on
+# some links; HF_HUB_ENABLE_HF_TRANSFER is now a deprecated no-op.
+export HF_HUB_DISABLE_XET=1
 
 mkdir -p models/{diffusion_models,text_encoders,vae,clip_vision,upscale_models,unet,checkpoints,loras,audio_models,TTS}
 

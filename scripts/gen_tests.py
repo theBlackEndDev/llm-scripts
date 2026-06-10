@@ -58,7 +58,7 @@ def g_hidream(pfx):
       "c": {"class_type":"QuadrupleCLIPLoader","inputs":{"clip_name1":"clip_l_hidream.safetensors","clip_name2":"clip_g_hidream.safetensors","clip_name3":"t5xxl_fp8_e4m3fn_scaled.safetensors","clip_name4":"llama_3.1_8b_instruct_fp8_scaled.safetensors"}},
       "v": {"class_type":"VAELoader","inputs":{"vae_name":"ae.safetensors"}},
       "l": {"class_type":"EmptySD3LatentImage","inputs":{"width":512,"height":512,"batch_size":1}},
-      "k": {"class_type":"KSampler","inputs":{"model":["u",0],"positive":["p",0],"negative":["n",0],"latent_image":["l",0],"seed":42,"steps":28,"cfg":5.0,"sampler_name":"lcm","scheduler":"normal","denoise":1.0}},
+      "k": {"class_type":"KSampler","inputs":{"model":["u",0],"positive":["p",0],"negative":["n",0],"latent_image":["l",0],"seed":42,"steps":30,"cfg":5.0,"sampler_name":"euler","scheduler":"normal","denoise":1.0}},
       "d": {"class_type":"VAEDecode","inputs":{"samples":["k",0],"vae":["v",0]}},
       "s": {"class_type":"SaveImage","inputs":{"images":["d",0],"filename_prefix":pfx}},
     }
@@ -66,11 +66,11 @@ def g_hidream(pfx):
 
 def g_qwen2512(pfx):
     g = {
-      "u": {"class_type":"UnetLoaderGGUF","inputs":{"unet_name":"qwen-image-2512-Q5_K_M.gguf"}},
+      "u": {"class_type":"UnetLoaderGGUF","inputs":{"unet_name":"qwen-image-2512-Q4_K_M.gguf"}},
       "c": {"class_type":"CLIPLoader","inputs":{"clip_name":"qwen_2.5_vl_7b_fp8_scaled.safetensors","type":"qwen_image"}},
       "v": {"class_type":"VAELoader","inputs":{"vae_name":"qwen_image_vae.safetensors"}},
       "l": {"class_type":"EmptySD3LatentImage","inputs":{"width":512,"height":512,"batch_size":1}},
-      "k": {"class_type":"KSampler","inputs":{"model":["u",0],"positive":["p",0],"negative":["n",0],"latent_image":["l",0],"seed":42,"steps":20,"cfg":2.5,"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
+      "k": {"class_type":"KSampler","inputs":{"model":["u",0],"positive":["p",0],"negative":["n",0],"latent_image":["l",0],"seed":42,"steps":20,"cfg":4.0,"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
       "d": {"class_type":"VAEDecode","inputs":{"samples":["k",0],"vae":["v",0]}},
       "s": {"class_type":"SaveImage","inputs":{"images":["d",0],"filename_prefix":pfx}},
     }

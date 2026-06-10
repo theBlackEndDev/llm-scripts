@@ -434,6 +434,7 @@ Environment=MIOPEN_FIND_MODE=FAST
 ExecStart=${INSTALL_DIR}/.venv/bin/python main.py \\
     --listen 0.0.0.0 --port ${PORT} \\
     --use-pytorch-cross-attention \\
+    --lowvram \\
     --disable-smart-memory
 Restart=always
 RestartSec=5

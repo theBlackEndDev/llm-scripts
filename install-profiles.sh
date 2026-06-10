@@ -300,12 +300,28 @@ EXPECTED_VRAM_GB=13
 EXPECTED_RAM_GB=12
 '
 
+write_profile "video-animate" '
+PROFILE_DESC="Video: Wan 2.2 Animate (character swap + lip-sync)"
+START="comfyui"
+STOP="ollama whisper gpt-sovits llama-server"
+EXPECTED_VRAM_GB=14
+EXPECTED_RAM_GB=14
+'
+
 write_profile "image" '
-PROFILE_DESC="Image gen: Flux Krea / SDXL via ComfyUI"
+PROFILE_DESC="Image gen: Z-Image/HiDream/Qwen/Chroma/Flux/SDXL via ComfyUI"
 START="comfyui"
 STOP="ollama whisper gpt-sovits llama-server"
 EXPECTED_VRAM_GB=12
 EXPECTED_RAM_GB=10
+'
+
+write_profile "image-edit" '
+PROFILE_DESC="Image editing: Qwen-Image-Edit-2511 / OmniGen2 via ComfyUI"
+START="comfyui"
+STOP="ollama whisper gpt-sovits llama-server"
+EXPECTED_VRAM_GB=13
+EXPECTED_RAM_GB=12
 '
 
 write_profile "train-tts" '

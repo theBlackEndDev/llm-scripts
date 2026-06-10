@@ -214,10 +214,18 @@ def grab(repo, fname, subdir, gated=False):
                       local_dir_use_symlinks=False)
         if hf_token: kwargs["token"] = hf_token
         hf_hub_download(**kwargs)
-        # Verify
-        candidate = os.path.join(target_dir, fname.split("/")[-1])
-        if os.path.exists(candidate) and os.path.getsize(candidate) > 1024:
-            print(f"   ok ({os.path.getsize(candidate)//(1024*1024)}MB)")
+        # hf_hub_download preserves the repo subpath under local_dir, so a
+        # filename like "split_files/vae/x.safetensors" lands NESTED. ComfyUI
+        # wants it flat in target_dir -> move it to the basename.
+        nested = os.path.join(target_dir, fname)
+        if os.path.abspath(nested) != os.path.abspath(target) and os.path.exists(nested):
+            os.replace(nested, target)
+            # prune now-empty nested dirs left behind by HF
+            d = os.path.dirname(nested)
+            while os.path.abspath(d) != os.path.abspath(target_dir) and os.path.isdir(d) and not os.listdir(d):
+                os.rmdir(d); d = os.path.dirname(d)
+        if os.path.exists(target) and os.path.getsize(target) > 1024:
+            print(f"   ok ({os.path.getsize(target)//(1024*1024)}MB)")
             ok_count += 1
             return True
         else:

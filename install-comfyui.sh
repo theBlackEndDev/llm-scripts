@@ -328,8 +328,8 @@ grab("Comfy-Org/flux2-dev",      "split_files/text_encoders/mistral_3_small_flux
 grab("Comfy-Org/flux2-dev",      "split_files/vae/flux2-vae.safetensors", "vae")
 grab("Comfy-Org/flux2-dev",      "split_files/loras/Flux2TurboComfyv2.safetensors", "loras")
 
-# ===== IMAGE: Qwen-Image-2512 (Apache 2.0; Q5_K_M for more quality, 62GB RAM gives headroom) =====
-grab("unsloth/Qwen-Image-2512-GGUF",  "qwen-image-2512-Q5_K_M.gguf", "diffusion_models")
+# ===== IMAGE: Qwen-Image-2512 (Apache 2.0; Q4_K_M fits 1024 on 16GB VRAM — Q5 OOMs at 1024) =====
+grab("unsloth/Qwen-Image-2512-GGUF",  "qwen-image-2512-Q4_K_M.gguf", "diffusion_models")
 grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "text_encoders")
 grab("Comfy-Org/Qwen-Image_ComfyUI",  "split_files/vae/qwen_image_vae.safetensors", "vae")
 
